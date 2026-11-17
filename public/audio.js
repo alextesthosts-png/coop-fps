@@ -309,3 +309,121 @@ export function bird(pos) {
   const base = 2200 + Math.random() * 1500;
   for (let i = 0; i < 2 + Math.floor(Math.random() * 3); i++) tone(dest, t + i * 0.13, 0.09, { freq: base, freqEnd: base * 1.4, vol: 0.2 });
 }
+
+// ---------- v4: weapons, throwables, bosses, power-ups ----------
+export function explosion(pos, big = 1) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.6 * big);
+  noise(dest, t, 1.2 * big, { freq: 1200, freqEnd: 60, vol: 1, attack: 0.005 });
+  noise(dest, t, 0.25, { type: 'highpass', freq: 2000, vol: 0.6 });
+  tone(dest, t, 0.9, { freq: 70, freqEnd: 22, vol: 1 });
+  noise(dest, t + 0.15, 1.5, { type: 'bandpass', freq: 300, q: 0.7, vol: 0.4, attack: 0.1 });
+}
+export function knife() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.4);
+  noise(dest, t, 0.18, { type: 'bandpass', freq: 3500, freqEnd: 1500, q: 2, vol: 0.8, attack: 0.02 });
+}
+export function knifeHit() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.5);
+  noise(dest, t, 0.12, { freq: 700, vol: 1 });
+  tone(dest, t, 0.08, { freq: 160, freqEnd: 80, vol: 0.6 });
+}
+export function chainsaw(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, pos ? 0.6 : 0.35);
+  tone(dest, t, 0.13, { type: 'sawtooth', freq: 95 + Math.random() * 10, vol: 0.5, attack: 0.01 });
+  tone(dest, t, 0.13, { type: 'square', freq: 190, vol: 0.15, attack: 0.01 });
+  noise(dest, t, 0.12, { type: 'bandpass', freq: 1800, q: 1, vol: 0.4 });
+}
+export function rocketLaunch(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1);
+  noise(dest, t, 0.9, { type: 'bandpass', freq: 600, freqEnd: 2500, q: 1, vol: 0.9, attack: 0.02 });
+  tone(dest, t, 0.3, { freq: 90, freqEnd: 40, vol: 0.7 });
+}
+export function crossbow(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.7);
+  tone(dest, t, 0.25, { type: 'triangle', freq: 180, freqEnd: 90, vol: 0.6 });
+  noise(dest, t, 0.1, { type: 'bandpass', freq: 2500, q: 3, vol: 0.6 });
+}
+export function beep(pos) {
+  if (!ok()) return;
+  tone(out(pos, 0.5), ctx.currentTime, 0.08, { type: 'square', freq: 1800, vol: 0.3 });
+}
+export function throwWhoosh(pos) {
+  if (!ok()) return;
+  noise(out(pos, 0.4), ctx.currentTime, 0.25, { type: 'bandpass', freq: 800, freqEnd: 300, q: 1, vol: 0.7, attack: 0.03 });
+}
+export function glassBreak(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1);
+  for (let i = 0; i < 6; i++) tone(dest, t + Math.random() * 0.1, 0.12, { freq: 3000 + Math.random() * 3000, vol: 0.2 });
+  noise(dest, t, 0.3, { type: 'highpass', freq: 4000, vol: 0.6 });
+  noise(dest, t + 0.05, 1.2, { type: 'bandpass', freq: 500, q: 0.6, vol: 0.5, attack: 0.15 }); // whoomp of fire
+}
+export function cymbal(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.9);
+  noise(dest, t, 0.35, { type: 'highpass', freq: 5000, vol: 0.6 });
+  [523, 659, 784].forEach((f, i) => tone(dest, t + 0.02 * i, 0.15, { type: 'triangle', freq: f * (1 + Math.random() * 0.02), vol: 0.15 }));
+}
+export function laserCharge(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1);
+  tone(dest, t, 1.3, { type: 'sawtooth', freq: 120, freqEnd: 900, vol: 0.35, attack: 0.1 });
+  tone(dest, t, 1.3, { type: 'sine', freq: 240, freqEnd: 1800, vol: 0.25, attack: 0.1 });
+}
+export function laserFire(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.3);
+  tone(dest, t, 2.2, { type: 'sawtooth', freq: 160, freqEnd: 140, vol: 0.4, attack: 0.02 });
+  tone(dest, t, 2.2, { type: 'square', freq: 322, freqEnd: 300, vol: 0.15, attack: 0.02 });
+  noise(dest, t, 2.2, { type: 'bandpass', freq: 3000, q: 2, vol: 0.3, attack: 0.02 });
+}
+export function shockwave(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.5);
+  tone(dest, t, 0.8, { freq: 55, freqEnd: 25, vol: 1 });
+  noise(dest, t, 0.8, { freq: 400, freqEnd: 60, vol: 0.9 });
+}
+export function zap(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.8);
+  for (let i = 0; i < 5; i++) noise(dest, t + i * 0.04, 0.04, { type: 'bandpass', freq: 3000 + Math.random() * 3000, q: 4, vol: 0.7 });
+  tone(dest, t, 0.25, { type: 'square', freq: 1200, freqEnd: 200, vol: 0.2 });
+}
+export function powerSpawn(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.7);
+  [988, 1319, 1568].forEach((f, i) => tone(dest, t + i * 0.08, 0.3, { type: 'sine', freq: f, vol: 0.25 }));
+}
+export function powerUp(kind) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.6);
+  const seq = { double: [523, 659, 784, 1047, 1319], insta: [196, 233, 196, 147], maxammo: [392, 523, 659, 784, 1047, 784, 1047], nuke: [110, 98, 82, 65] }[kind] || [523, 784];
+  seq.forEach((f, i) => tone(dest, t + i * 0.1, 0.3, { type: kind === 'insta' || kind === 'nuke' ? 'sawtooth' : 'triangle', freq: f, vol: 0.3 }));
+  if (kind === 'nuke') noise(dest, t + 0.4, 2.5, { freq: 300, freqEnd: 40, vol: 1, attack: 0.05 });
+}
+export function armor() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.5);
+  noise(dest, t, 0.15, { type: 'bandpass', freq: 2200, q: 6, vol: 0.8 });
+  noise(dest, t + 0.18, 0.15, { type: 'bandpass', freq: 1800, q: 6, vol: 0.8 });
+  tone(dest, t + 0.05, 0.3, { type: 'triangle', freq: 880, vol: 0.15 });
+}
+export function rotor(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.6);
+  for (let i = 0; i < 4; i++) noise(dest, t + i * 0.09, 0.07, { freq: 240, vol: 0.9, attack: 0.01 });
+}
+export function victory() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.6);
+  [[523, 0], [659, 0.15], [784, 0.3], [1047, 0.5], [784, 0.7], [1047, 0.85]].forEach(([f, d]) => {
+    tone(dest, t + d, 0.6, { type: 'triangle', freq: f, vol: 0.3 });
+    tone(dest, t + d, 0.6, { type: 'sine', freq: f / 2, vol: 0.2 });
+  });
+}

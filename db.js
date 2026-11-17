@@ -2,14 +2,14 @@
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULTS = { credits: 500, bank: 0, kills: 0, best_wave: 0, games: 0, playtime: 0, weapons: ['rifle', 'pistol'] };
+const DEFAULTS = { credits: 500, bank: 0, kills: 0, best_wave: 0, games: 0, playtime: 0, escapes: 0, weapons: ['rifle', 'pistol'] };
 
 function rowToProfile(r) {
   let weapons = DEFAULTS.weapons;
   try { const w = JSON.parse(r.weapons); if (Array.isArray(w) && w.length) weapons = w; } catch {}
   return {
     token: r.token, name: r.name, credits: r.credits | 0, bank: r.bank | 0, kills: r.kills | 0,
-    best_wave: r.best_wave | 0, games: r.games | 0, playtime: r.playtime | 0, weapons,
+    best_wave: r.best_wave | 0, games: r.games | 0, playtime: r.playtime | 0, escapes: r.escapes | 0, weapons,
   };
 }
 
@@ -40,6 +40,7 @@ if (process.env.DATABASE_URL) {
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )`);
+        await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS escapes INTEGER NOT NULL DEFAULT 0');
         console.log('[db] Postgres ready');
         return true;
       } catch (e) {
@@ -60,16 +61,16 @@ if (process.env.DATABASE_URL) {
     async save(p) {
       if (!(await ready)) return;
       await pool.query(
-        `INSERT INTO profiles (token, name, credits, bank, kills, best_wave, games, playtime, weapons, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+        `INSERT INTO profiles (token, name, credits, bank, kills, best_wave, games, playtime, weapons, escapes, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
          ON CONFLICT (token) DO UPDATE SET name=$2, credits=$3, bank=$4, kills=$5, best_wave=$6,
-           games=$7, playtime=$8, weapons=$9, updated_at=now()`,
-        [p.token, p.name, p.credits, p.bank, p.kills, p.best_wave, p.games, p.playtime, JSON.stringify(p.weapons)]
+           games=$7, playtime=$8, weapons=$9, escapes=$10, updated_at=now()`,
+        [p.token, p.name, p.credits, p.bank, p.kills, p.best_wave, p.games, p.playtime, JSON.stringify(p.weapons), p.escapes | 0]
       );
     },
     async top(n = 5) {
       if (!(await ready)) return [];
-      const { rows } = await pool.query('SELECT name, best_wave, kills FROM profiles WHERE best_wave > 0 ORDER BY best_wave DESC, kills DESC LIMIT $1', [n]);
+      const { rows } = await pool.query('SELECT name, best_wave, kills, escapes FROM profiles WHERE best_wave > 0 ORDER BY escapes DESC, best_wave DESC, kills DESC LIMIT $1', [n]);
       return rows;
     },
   };
@@ -92,8 +93,8 @@ if (process.env.DATABASE_URL) {
     async save(p) { data[p.token] = { ...p }; persist(); },
     async top(n = 5) {
       return Object.values(data).filter(p => p.best_wave > 0)
-        .sort((a, b) => b.best_wave - a.best_wave || b.kills - a.kills).slice(0, n)
-        .map(({ name, best_wave, kills }) => ({ name, best_wave, kills }));
+        .sort((a, b) => (b.escapes | 0) - (a.escapes | 0) || b.best_wave - a.best_wave || b.kills - a.kills).slice(0, n)
+        .map(({ name, best_wave, kills, escapes }) => ({ name, best_wave, kills, escapes: escapes | 0 }));
     },
   };
 }
