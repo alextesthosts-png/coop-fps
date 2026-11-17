@@ -7,7 +7,10 @@ const db = require('./db');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  perMessageDeflate: { threshold: 512 }, // the 20 Hz state packets compress ~4x
+  pingInterval: 10000, pingTimeout: 20000,
+});
 
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
 // Serve Three.js (+ loaders) from node_modules so the game doesn't depend on a CDN
@@ -1015,22 +1018,27 @@ function simulate() {
     }
   }
 
+  // positions every tick; slower-changing fields 5x per second
+  const full = tickN % 4 === 0;
+  const r2 = v => Math.round(v * 100) / 100;
   const ps = {};
   for (const p of Object.values(players)) {
-    ps[p.id] = {
-      x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, health: Math.round(p.health), maxHealth: p.maxHealth, armor: Math.round(p.armor),
-      alive: p.alive, kills: p.kills, credits: p.credits, bank: p.bank, weapon: p.weapons[p.cur], perks: Object.keys(p.perks),
-      c: p.crouch, hid: p.hidden, fr: p.frags, mo: p.molotovs, mk: p.monkeys,
+    const s = ps[p.id] = {
+      x: r2(p.x), y: r2(p.y), z: r2(p.z), yaw: r2(p.yaw), pitch: r2(p.pitch), health: Math.round(p.health), armor: Math.round(p.armor),
+      alive: p.alive, c: p.crouch, hid: p.hidden, weapon: p.weapons[p.cur],
     };
+    if (full) Object.assign(s, { maxHealth: p.maxHealth, kills: p.kills, credits: p.credits, bank: p.bank, perks: Object.keys(p.perks), fr: p.frags, mo: p.molotovs, mk: p.monkeys });
   }
   const es = {};
   for (const e of Object.values(enemies)) {
-    es[e.id] = { x: +e.x.toFixed(2), z: +e.z.toFixed(2), hp: e.hp, maxHp: e.maxHp, type: e.type, bk: e.bk };
+    es[e.id] = { x: r2(e.x), z: r2(e.z), hp: Math.ceil(e.hp), maxHp: e.maxHp, type: e.type, bk: e.bk };
     if (e.beam) es[e.id].beam = { ph: e.beam.ph, a: +e.beam.a.toFixed(3), len: +e.beam.len.toFixed(1) };
   }
   const pj = {};
   for (const p of Object.values(projs)) pj[p.id] = { t: p.type, x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2), r: p.rest ? 1 : 0 };
-  io.emit('state', { players: ps, enemies: es, projs: pj, wave, pu: { double: Math.max(0, powers.double - t), insta: Math.max(0, powers.insta - t) }, esc: escState() });
+  const msg = { players: ps, enemies: es, projs: pj, wave };
+  if (full) { msg.pu = { double: Math.max(0, powers.double - t), insta: Math.max(0, powers.insta - t) }; msg.esc = escState(); }
+  io.volatile.emit('state', msg); // volatile: a late packet is dropped instead of queued behind newer ones
 }
 
 rebuildObstacles();

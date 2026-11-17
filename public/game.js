@@ -16,10 +16,13 @@ let MAP = null, WEAPONS = null, OBST = [], BOSS_NAMES = {};
 const openDoors = new Set();
 
 // ================= Renderer / Scene =================
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+let GFX = 'high';
+try { GFX = localStorage.getItem('fps-gfx') || 'high'; } catch {}
+const LOW = GFX === 'low';
+const renderer = new THREE.WebGLRenderer({ antialias: !LOW, powerPreference: 'high-performance' });
+renderer.setPixelRatio(LOW ? 1 : Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = !LOW;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 
@@ -42,8 +45,24 @@ scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x3a2f28, 0.75));
 const sun = new THREE.DirectionalLight(0xffffff, 1.3);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.autoUpdate = false; // re-rendered every other frame in animate()
 Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 160 });
 scene.add(sun, sun.target);
+
+// ================= Effect light pool =================
+// Adding/removing lights forces three.js to recompile every shader (a visible freeze), so effects borrow from a fixed pool.
+const LIGHT_POOL = [];
+for (let i = 0; i < 6; i++) { const l = new THREE.PointLight(0xffffff, 0, 10, 1.5); l.position.set(0, -50, 0); scene.add(l); LIGHT_POOL.push({ l, owner: null, until: 0 }); }
+function borrowLight(owner, color, intensity, distance, p, ms) {
+  const t = performance.now();
+  let e = LIGHT_POOL.find(x => !x.owner || x.until < t) || LIGHT_POOL.reduce((a, b) => (a.until < b.until ? a : b));
+  e.owner = owner; e.until = t + ms;
+  e.l.color.setHex(color); e.l.intensity = intensity; e.l.distance = distance; e.l.position.copy(p);
+  return e;
+}
+function releaseLight(e, owner) { if (e && e.owner === owner) { e.owner = null; e.l.intensity = 0; } }
+const muzzleLight = new THREE.PointLight(0xffc107, 0, 6, 1.5);
+scene.add(muzzleLight);
 
 // ================= Helpers =================
 const hex = c => '#' + c.toString(16).padStart(6, '0');
@@ -289,7 +308,6 @@ function buildDecor(d) {
       pole.position.y = tall / 2; pole.castShadow = true; g.add(pole); solids.push(pole);
       const bulb = new THREE.Mesh(d.t === 'flood' ? new THREE.BoxGeometry(0.8, 0.4, 0.3) : new THREE.SphereGeometry(0.25, 10, 8), M.bulb);
       bulb.position.y = tall + 0.05; g.add(bulb);
-      const light = new THREE.PointLight(d.t === 'flood' ? 0xe3f2fd : 0xffe0a0, d.t === 'flood' ? 26 : 18, 16, 1.6); light.position.y = tall - 0.2; g.add(light);
       scene.add(g); return g;
     }
     case 'crate': {
@@ -495,7 +513,7 @@ function buildDoors() {
     const [a, b] = d.zones.map(zoneById);
     const label = makeLabel([d.zones.includes('main') ? (a.id === 'main' ? b.name : a.name) : `${a.name} ⇄ ${b.name}`, `${d.cost} credits to open`], '#ffd54f', 3.4);
     label.position.y = h + 1.2; g.add(label);
-    const glow = new THREE.PointLight(0xffb300, 12, 9, 1.5); glow.position.y = 3; g.add(glow);
+    const glow = { intensity: 0 }; // no real light: lights inside hidden groups would change the light count
     scene.add(g);
     doorObjs[d.id] = { g, gate, label, glow, bars, data: d, anim: 0, open: false };
   }
@@ -587,11 +605,10 @@ function buildStations() {
       const panel = new THREE.Mesh(new THREE.BoxGeometry(w * 0.8, h * 0.35, 0.05), panelMat);
       panel.position.set(px, h * 0.65, pz); panel.rotation.y = ry; g.add(panel);
     }
-    const light = new THREE.PointLight(p.color, 22, 9, 1.5);
-    light.position.set(0, 2.6, 0);
+    const light = null;
     const label = makeLabel([p.name, `${p.cost} credits`], hex(p.color), 2.6);
     label.position.y = h + 0.9;
-    g.add(body, top, light, label);
+    g.add(body, top, label);
     g.position.set(p.x, 0, p.z);
     scene.add(g); solids.push(body);
     stations['perk:' + p.id] = { type: 'perk', id: p.id, x: p.x, z: p.z, data: p, group: g, light };
@@ -629,10 +646,9 @@ function buildStations() {
     const screen = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.75, b.h * 0.35, 0.04), new THREE.MeshBasicMaterial({ color: 0x00e676 }));
     screen.position.set(0, b.h * 0.7, -(b.d / 2 + 0.02));
     const screen2 = screen.clone(); screen2.position.z = b.d / 2 + 0.02;
-    const light = new THREE.PointLight(0xffd54f, 20, 9, 1.5); light.position.y = b.h + 0.5;
     const label = makeLabel(['BANK', 'deposit · withdraw'], '#ffd54f', 2.4);
     label.position.y = b.h + 1.0;
-    g.add(body, screen, screen2, light, label);
+    g.add(body, screen, screen2, label);
     g.position.set(b.x, 0, b.z);
     scene.add(g); solids.push(body);
     stations.bank = { type: 'bank', x: b.x, z: b.z, group: g };
@@ -694,7 +710,6 @@ function buildHelicopter() {
   for (let i = 0; i < 4; i++) { const blade = new THREE.Mesh(new THREE.BoxGeometry(11, 0.06, 0.4), M.black); blade.rotation.y = i * Math.PI / 4; rotor.add(blade); }
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.6, 10), M.metal); hub.position.y = 3.3;
   for (const s of [-1, 1]) { const skid = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 5), M.metal); skid.position.set(s * 1.3, 0.1, 0); g.add(skid); }
-  const light = new THREE.SpotLight(0xffffff, 60, 40, 0.5, 0.5); light.position.y = 1; light.target.position.set(0, -10, 0); g.add(light, light.target);
   g.add(body, glass, tail, fin, rotor, hub);
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   g.visible = false;
@@ -743,7 +758,6 @@ const GUN_ADS = new THREE.Vector3(0, -0.075, -0.18);
 const FP_SCALE = 0.45;
 let fpGun = null;
 const flash = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffe082 }));
-const flashLight = new THREE.PointLight(0xffc107, 0, 6);
 const fpKnife = knifeModel();
 fpKnife.visible = false;
 fpKnife.position.set(0.25, -0.25, -0.4);
@@ -761,7 +775,7 @@ function setFpWeapon(key) {
   fpGun.userData = model.userData;
   fpGun.scale.setScalar(FP_SCALE);
   fpGun.position.copy(GUN_REST);
-  fpGun.userData.muzzle.add(flash, flashLight);
+  fpGun.userData.muzzle.add(flash);
   flash.visible = false;
   flash.material.color.setHex(WEAPONS[key].tracer);
   fpGun.traverse(o => { if (o.isMesh) o.castShadow = false; });
@@ -847,7 +861,6 @@ function makeEnemy(e) {
     if (walk) { walk.play(); walk.time = Math.random() * walk.getClip().duration; }
     model.root.traverse(o => { if (o.isMesh && !mat) mat = o.material; });
     if (boss) {
-      const aura = new THREE.PointLight(BOSS_TINT[e.bk], 30, 10, 1.5); aura.position.y = 3; g.add(aura);
       if (actions.scream) { actions.scream.setLoop(THREE.LoopOnce); actions.scream.reset().play(); }
     }
   } else {
@@ -879,9 +892,23 @@ function makeBeam() {
   const glow = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 12, 1, true), new THREE.MeshBasicMaterial({ color: 0xff1744, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending }));
   core.rotation.x = glow.rotation.x = Math.PI / 2;
   g.add(core, glow);
-  const end = new THREE.PointLight(0xff1744, 0, 12, 1.5); g.add(end);
   g.visible = false;
-  return { g, core, glow, end };
+  return { g, core, glow };
+}
+
+// Compile every shader we will need up front so the first zombie / explosion / boss doesn't stall the game
+function warmUp() {
+  const temp = [];
+  for (const [type, bk] of [['brute'], ['runner'], ['boss', 'king'], ['boss', 'warden']]) {
+    const g = makeEnemy({ id: 'warm-' + type + (bk || ''), type, bk, x: pos.x, z: pos.z - 5 });
+    temp.push(g); if (g.userData.beam) { g.userData.beam.g.visible = true; temp.push(g.userData.beam.g); }
+  }
+  temp.push(makeAvatar({ id: 'warm', name: '', color: 0xffffff, skin: 0, weapon: 'rifle' }));
+  for (const t of ['frag', 'molotov', 'monkey', 'rocket']) { const m = projModel(t); m.position.set(pos.x, 1, pos.z - 4); scene.add(m); temp.push(m); }
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff9100, transparent: true, opacity: 0.5, depthWrite: false }));
+  ball.position.set(pos.x, 1, pos.z - 4); scene.add(ball); temp.push(ball);
+  try { renderer.compile(scene, camera); } catch (e) { console.warn('warm-up failed', e); }
+  for (const o of temp) scene.remove(o);
 }
 
 // corpses play their death animation and sink away
@@ -916,8 +943,6 @@ function addMedkit(m) {
     v.position.z = h.position.z = s * 0.231;
     g.add(v, h);
   }
-  const light = new THREE.PointLight(0xff5252, 6, 5, 1.5); light.position.y = 0.6;
-  g.add(light);
   g.position.set(m.x, 0.5, m.z);
   g.userData = { x: m.x, z: m.z };
   scene.add(g);
@@ -941,8 +966,7 @@ function addPower(u) {
   const g = new THREE.Group(); g.position.set(u.x, 1.2, u.z);
   const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 1), new THREE.MeshStandardMaterial({ color: 0xffd54f, emissive: 0xaa8800, metalness: 0.8, roughness: 0.2, transparent: true, opacity: 0.85 }));
   const sp = textSprite(PU[u.type].label, PU[u.type].color, 0.7); sp.position.y = 0.75;
-  const light = new THREE.PointLight(0xffd54f, 18, 8, 1.5);
-  g.add(orb, sp, light);
+  g.add(orb, sp);
   scene.add(g);
   puObjs[u.id] = { g, orb, until: performance.now() + (u.until - Date.now()), x: u.x, z: u.z };
   SFX.powerSpawn(g.position.clone());
@@ -958,8 +982,7 @@ function projModel(type) {
   const g = new THREE.Group();
   const rocket = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.5, 10), std(0x556b2f)); rocket.rotation.x = -Math.PI / 2;
   const fire = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.5, 8), M.flame); fire.rotation.x = Math.PI / 2; fire.position.z = 0.45;
-  const light = new THREE.PointLight(0xff9100, 20, 8, 1.5);
-  g.add(rocket, fire, light);
+  g.add(rocket, fire);
   return g;
 }
 function syncProjs(list) {
@@ -996,9 +1019,9 @@ function addFire(f) {
   }
   const scorch = new THREE.Mesh(new THREE.CircleGeometry(f.r, 24), new THREE.MeshBasicMaterial({ color: 0x1a1a1a, transparent: true, opacity: 0.6 }));
   scorch.rotation.x = -Math.PI / 2; scorch.position.y = 0.03; g.add(scorch);
-  const light = new THREE.PointLight(0xff6d00, 40, 14, 1.5); light.position.y = 1.5; g.add(light);
   scene.add(g);
-  fireObjs[f.id] = { g, flames, light, until: performance.now() + f.ms, crackleT: 0 };
+  const fo = fireObjs[f.id] = { g, flames, light: null, until: performance.now() + f.ms, crackleT: 0 };
+  fo.light = borrowLight(fo, 0xff6d00, 40, 14, new THREE.Vector3(f.x, 1.5, f.z), f.ms);
 }
 
 const booms = [];
@@ -1007,9 +1030,10 @@ function boomFx({ x, y, z, r, type }) {
   const color = type === 'monkey' ? 0xffd54f : type === 'bolt' ? 0xff7043 : 0xff9100;
   const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false }));
   ball.position.copy(p);
-  const light = new THREE.PointLight(color, 120, r * 5, 1.5); light.position.copy(p);
-  scene.add(ball, light);
-  booms.push({ ball, light, t: 0, r });
+  scene.add(ball);
+  const bm = { ball, light: null, t: 0, r };
+  bm.light = borrowLight(bm, color, 120, r * 5, p, 500);
+  booms.push(bm);
   burst(p, 0x5d4037, 16, 1.6);
   burst(p, color, 12, 1.2);
   SFX.explosion(p, Math.min(1.4, r / 5));
@@ -1022,11 +1046,10 @@ function boltFx({ at, ms }) {
   const g = new THREE.Group(); g.position.set(at[0], at[1], at[2]);
   const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.4, 6), std(0x5d4037)); shaft.rotation.x = Math.PI / 2;
   const led = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff1744 }));
-  const light = new THREE.PointLight(0xff1744, 8, 4, 1.5);
-  g.add(shaft, led, light);
+  g.add(shaft, led);
   g.lookAt(camPos);
   scene.add(g);
-  bolts.push({ g, led, light, until: performance.now() + ms, beepT: 0 });
+  bolts.push({ g, led, until: performance.now() + ms, beepT: 0 });
 }
 
 const rings = [];
@@ -1053,14 +1076,17 @@ function spawnTracer(from, to, color = 0xffeb3b) {
 }
 const particles = [];
 const partGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+const partMats = new Map();
+const partMat = c => { let m = partMats.get(c); if (!m) { m = new THREE.MeshBasicMaterial({ color: c }); partMats.set(c, m); } return m; };
 function burst(p, color, n = 14, speed = 1) {
+  if (LOW) n = Math.ceil(n / 2);
   for (let i = 0; i < n; i++) {
-    const m = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color }));
+    const m = new THREE.Mesh(partGeo, partMat(color));
     m.position.copy(p);
     scene.add(m);
     particles.push({ m, v: new THREE.Vector3((Math.random() - 0.5) * 8 * speed, Math.random() * 7 * speed, (Math.random() - 0.5) * 8 * speed), life: 0.8 });
   }
-  while (particles.length > 400) { const q = particles.shift(); scene.remove(q.m); q.m.material.dispose(); }
+  while (particles.length > 300) { const q = particles.shift(); scene.remove(q.m); }
 }
 const rocks = [];
 const rockGeo = new THREE.DodecahedronGeometry(0.6, 0);
@@ -1151,11 +1177,13 @@ function getToken() {
 const myToken = getToken();
 
 // ================= Networking =================
-const socket = io({ autoConnect: false });
+const socket = io({ autoConnect: false, transports: ['websocket'] });
 let myId = null;
 const playerInfo = {};
 const remote = {};
 const enemyObjs = {};
+const pendingEnemies = new Map();
+const stateCache = {};
 let wave = 0;
 let health = 100, maxHealth = 100, armor = 0, alive = true, credits = 0, bank = 0, myPerks = [], hiddenState = false;
 let throwables = { fr: 0, mo: 0, mk: 0 };
@@ -1182,7 +1210,7 @@ socket.on('disconnect', () => { hud.conn.textContent = 'Disconnected – retryin
 socket.on('init', data => {
   myId = data.id;
   MAP = data.map; WEAPONS = data.weapons; BOSS_NAMES = data.bossNames || {};
-  if (!worldBuilt) buildWorld();
+  if (!worldBuilt) { buildWorld(); warmUp(); }
   closeAllDoors();
   for (const id of data.openDoors) openDoor(id, true);
   for (const id in remote) { scene.remove(remote[id].mesh); delete remote[id]; }
@@ -1190,10 +1218,11 @@ socket.on('init', data => {
   for (const id in medkitObjs) removeMedkit(id);
   for (const id in puObjs) removePower(id);
   for (const id in projObjs) removeProj(id);
-  for (const id in fireObjs) { scene.remove(fireObjs[id].g); delete fireObjs[id]; }
+  for (const id in fireObjs) { releaseLight(fireObjs[id].light, fireObjs[id]); scene.remove(fireObjs[id].g); delete fireObjs[id]; }
   for (const id in playerInfo) delete playerInfo[id];
   for (const p of Object.values(data.players)) addPlayer(p);
-  for (const e of Object.values(data.enemies)) addEnemy(e);
+  pendingEnemies.clear();
+  for (const e of Object.values(data.enemies)) pendingEnemies.set(e.id, e);
   for (const m of Object.values(data.medkits)) addMedkit(m);
   for (const u of Object.values(data.powerDrops || {})) addPower(u);
   for (const f of data.fires || []) addFire(f);
@@ -1241,6 +1270,7 @@ socket.on('maxAmmo', () => {
 });
 
 function addPlayer(p) {
+  stateCache[p.id] = { fr: 0, mo: 0, mk: 0, ...p };
   playerInfo[p.id] = { id: p.id, name: p.name, color: p.color, health: p.health, alive: p.alive, kills: p.kills, credits: p.credits };
   if (p.id !== myId) remote[p.id] = { mesh: makeAvatar(p), target: { ...p } };
 }
@@ -1272,22 +1302,24 @@ socket.on('state', s => {
   wave = s.wave;
   powerTimers = s.pu || powerTimers;
   if (s.esc) escState = s.esc;
-  for (const [id, p] of Object.entries(s.players)) {
+  for (const [id, part] of Object.entries(s.players)) {
+    const p = stateCache[id] = Object.assign(stateCache[id] || {}, part);
     const info = playerInfo[id];
     if (info) Object.assign(info, { health: p.health, alive: p.alive, kills: p.kills, credits: p.credits });
     if (id === myId) {
       health = p.health; maxHealth = p.maxHealth; armor = p.armor; credits = p.credits; bank = p.bank; myPerks = p.perks; hiddenState = p.hid;
-      throwables = { fr: p.fr, mo: p.mo, mk: p.mk };
+      throwables = { fr: p.fr ?? 0, mo: p.mo ?? 0, mk: p.mk ?? 0 };
       continue;
     }
     const r = remote[id];
     if (r) { r.target = p; r.mesh.visible = p.alive; setAvatarWeapon(r.mesh, p.weapon); }
   }
   for (const [id, e] of Object.entries(s.enemies)) {
-    if (!enemyObjs[id]) addEnemy({ id, ...e });
     const o = enemyObjs[id];
+    if (!o) { pendingEnemies.set(id, { id, ...e }); continue; }
     o.target.x = e.x; o.target.z = e.z; o.hp = e.hp; o.maxHp = e.maxHp; o.beam = e.beam || null;
   }
+  for (const id of pendingEnemies.keys()) if (!s.enemies[id]) pendingEnemies.delete(id);
   for (const id of Object.keys(enemyObjs)) if (!s.enemies[id]) removeEnemy(id, false);
   syncProjs(s.projs || {});
 });
@@ -1535,6 +1567,9 @@ $('play-btn').addEventListener('click', () => {
 });
 try { $('name-input').value = localStorage.getItem('fps-name') || ''; } catch {}
 $('name-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('play-btn').click(); e.stopPropagation(); });
+const gfxSel = $('gfx');
+gfxSel.value = GFX;
+gfxSel.addEventListener('change', () => { try { localStorage.setItem('fps-gfx', gfxSel.value); } catch {} location.reload(); });
 const vol = $('volume');
 try { vol.value = localStorage.getItem('fps-vol') ?? 0.6; } catch {}
 vol.addEventListener('input', () => { SFX.setVolume(+vol.value); try { localStorage.setItem('fps-vol', vol.value); } catch {} });
@@ -1942,7 +1977,7 @@ function drawMinimap() {
 
 // ================= Main loop =================
 const clock = new THREE.Clock();
-let sendT = 0, bob = 0, growlBudget = 0, hudT = 0, mmT = 0, birdT = 3, lastZone = null, rotorSoundT = 0;
+let frameN = 0, sendT = 0, bob = 0, growlBudget = 0, hudT = 0, mmT = 0, birdT = 3, lastZone = null, rotorSoundT = 0;
 const tmpV = new THREE.Vector3(), fwdV = new THREE.Vector3();
 const BOX_SHOWN = ['pistol', 'smg', 'mp5', 'ak', 'shotgun', 'sniper', 'lmg', 'crossbow', 'rpg', 'chainsaw', 'raygun', 'monkey'];
 const boxItem = k => { if (k === 'monkey') { const m = monkeyModel(); m.scale.setScalar(2.5); return m; } return makeWeaponModel(k); };
@@ -1954,6 +1989,14 @@ function animate() {
   if (!worldBuilt || !fpGun) { renderer.render(scene, camera); return; }
 
   updatePlayer(dt);
+
+  // build at most 3 new zombies per frame
+  let built = 0;
+  for (const [id, e] of pendingEnemies) {
+    if (built++ >= 3) break;
+    pendingEnemies.delete(id);
+    if (!enemyObjs[id]) addEnemy(e);
+  }
 
   // weapon
   const W = curW();
@@ -1982,6 +2025,8 @@ function animate() {
 
   sun.position.set(pos.x + 30, 60, pos.z + 20);
   sun.target.position.set(pos.x, 0, pos.z);
+  frameN++;
+  if (!LOW && frameN % 2 === 0) sun.shadow.needsUpdate = true;
 
   // first-person gun / knife / throw animation
   const moving = onGround && (Math.abs(vel.x) + Math.abs(vel.z) > 1);
@@ -2004,7 +2049,8 @@ function animate() {
   if (fpGun.userData.chain) fpGun.userData.chain.position.y = -0.02 + (sawT > 0 ? Math.sin(t * 90) * 0.008 : 0);
   const showFlash = recoil > 0.7 && !noAmmo(curKey());
   flash.visible = showFlash;
-  flashLight.intensity = showFlash ? 8 : 0;
+  if (showFlash) flash.getWorldPosition(muzzleLight.position);
+  muzzleLight.intensity = showFlash ? 8 : 0;
 
   // remote players
   for (const [id, r] of Object.entries(remote)) {
@@ -2088,8 +2134,6 @@ function animate() {
         ud.beam.core.scale.set(r * 0.4, len, r * 0.4);
         ud.beam.glow.scale.set(r * (charge ? 2 : 2.5), len, r * (charge ? 2 : 2.5));
         ud.beam.core.material.opacity = charge ? 0.4 + Math.sin(t * 30) * 0.3 : 0.95;
-        ud.beam.end.position.set(0, 0, len / 2);
-        ud.beam.end.intensity = charge ? 5 : 40;
         if (!charge && Math.random() < 0.5) burst(new THREE.Vector3(ox + Math.sin(b.a) * len, 1.2, oz + Math.cos(b.a) * len), 0xff1744, 1, 0.6);
         m.rotation.y = b.a + Math.PI;
       }
@@ -2131,10 +2175,10 @@ function animate() {
   }
   for (const [id, f] of Object.entries(fireObjs)) {
     const left = f.until - performance.now();
-    if (left <= 0) { scene.remove(f.g); delete fireObjs[id]; continue; }
+    if (left <= 0) { releaseLight(f.light, f); scene.remove(f.g); delete fireObjs[id]; continue; }
     const k = Math.min(1, left / 1000);
     f.flames.forEach((fl, i) => { fl.scale.set(k, k * (0.8 + Math.sin(t * 12 + i) * 0.3), k); });
-    f.light.intensity = 30 * k + Math.sin(t * 25) * 6;
+    if (f.light.owner === f) f.light.l.intensity = 30 * k + Math.sin(t * 25) * 6;
     f.crackleT -= dt;
     if (f.crackleT <= 0) { f.crackleT = 0.25; SFX.crackle(f.g.position.clone().setY(0.5)); }
   }
@@ -2144,14 +2188,14 @@ function animate() {
     const k = b.t / 0.5;
     b.ball.scale.setScalar(b.r * (0.3 + k * 0.8));
     b.ball.material.opacity = Math.max(0, 0.9 * (1 - k));
-    if (b.light) b.light.intensity = Math.max(0, 120 * (1 - k * 2));
-    if (k >= 1) { scene.remove(b.ball); if (b.light) scene.remove(b.light); booms.splice(i, 1); }
+    if (b.light && b.light.owner === b) b.light.l.intensity = Math.max(0, 120 * (1 - k * 2));
+    if (k >= 1) { scene.remove(b.ball); releaseLight(b.light, b); booms.splice(i, 1); }
   }
   for (let i = bolts.length - 1; i >= 0; i--) {
     const b = bolts[i];
     b.beepT -= dt;
     const blink = Math.sin(t * 30) > 0;
-    b.led.visible = blink; b.light.intensity = blink ? 8 : 0;
+    b.led.visible = blink;
     if (b.beepT <= 0) { b.beepT = 0.25; SFX.beep(b.g.position.clone()); }
     if (performance.now() > b.until) { scene.remove(b.g); bolts.splice(i, 1); }
   }
@@ -2251,7 +2295,7 @@ function animate() {
     p.m.position.addScaledVector(p.v, dt);
     if (p.m.position.y < 0.07) { p.m.position.y = 0.07; p.v.multiplyScalar(0.5); }
     p.m.scale.setScalar(Math.max(0.01, p.life));
-    if (p.life <= 0) { scene.remove(p.m); p.m.material.dispose(); particles.splice(i, 1); }
+    if (p.life <= 0) { scene.remove(p.m); particles.splice(i, 1); }
   }
   for (let i = rocks.length - 1; i >= 0; i--) {
     const r = rocks[i];

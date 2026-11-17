@@ -182,3 +182,6 @@ canvas { display: block; }
 @keyframes load { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 .credits-line { font-size: 11px; opacity: .45; }
 #overlay .guide { font-size: 12.5px; }
+
+.settings { display: flex; gap: 24px; }
+.settings select { background: #111820; color: #fff; border: 1px solid #455; border-radius: 4px; padding: 4px 6px; }
