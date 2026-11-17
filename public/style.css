@@ -57,3 +57,55 @@ canvas { display: block; }
 #play-btn:hover { background: #81d4fa; }
 .controls { font-size: 13px; opacity: .7; margin-top: 8px; }
 #conn-status { font-size: 12px; opacity: .6; }
+
+/* ---------- v2 additions ---------- */
+.bar.thin { height: 4px; margin-top: 6px; opacity: 1; transition: opacity .5s; }
+.bar.thin.full { opacity: .25; }
+#stamina-fill { height: 100%; width: 100%; background: #ffd54f; }
+
+#perks { display: flex; gap: 6px; margin-bottom: 8px; min-height: 0; }
+#perks:empty { display: none; }
+.perk { width: 30px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 900; color: #fff; text-shadow: 0 1px 2px #000; box-shadow: 0 0 10px rgba(255,255,255,.25); }
+
+#credits-panel { left: 276px; bottom: 20px; display: flex; gap: 18px; padding: 8px 14px; }
+#credits-panel > div { display: flex; flex-direction: column; }
+#credits-text { font-size: 22px; font-weight: 800; color: #69f0ae; }
+#bank-text { font-size: 22px; font-weight: 800; color: #ffd54f; }
+#credits-panel .label { margin-bottom: 0; }
+
+#weapon-name { font-size: 13px; font-weight: 700; letter-spacing: 1px; opacity: .9; }
+#weapon-slots { display: flex; flex-direction: column; font-size: 11px; opacity: .55; margin-top: 4px; }
+#weapon-slots .on { opacity: 1; color: #4fc3f7; font-weight: 700; }
+
+#prompt { position: fixed; left: 50%; top: 60%; transform: translateX(-50%); text-align: center; z-index: 6; pointer-events: none; font-size: 16px; text-shadow: 0 1px 3px #000; }
+#prompt > div { background: rgba(0,0,0,.55); padding: 6px 14px; border-radius: 6px; margin-top: 6px; }
+#prompt b { color: #ffd54f; }
+#prompt .cost { color: #69f0ae; font-weight: 800; margin-left: 6px; }
+#prompt .cost.no { color: #ff5252; }
+#prompt .sub { font-size: 12px; opacity: .75; }
+
+#notices { position: fixed; left: 20px; top: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 6; pointer-events: none; }
+.notice { background: rgba(0,0,0,.6); border-left: 4px solid #4fc3f7; padding: 6px 12px; border-radius: 4px; font-size: 14px; transition: opacity .6s; }
+.notice.deny { border-color: #ff5252; }
+.notice.bank { border-color: #ffd54f; }
+.notice.perk { border-color: #ab47bc; }
+.notice.weapon { border-color: #40c4ff; }
+.notice.heal { border-color: #69f0ae; }
+.notice.fade { opacity: 0; }
+
+#points { position: fixed; left: 50%; top: 44%; z-index: 6; pointer-events: none; }
+#points .pt { position: absolute; transform: translateX(-50%); color: #69f0ae; font-weight: 900; font-size: 20px; text-shadow: 0 1px 3px #000; animation: rise 1s ease-out forwards; }
+@keyframes rise { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, -50px); } }
+
+#players-list .cr { color: #69f0ae; }
+#dead small { font-size: 14px; color: #ffcdd2; font-weight: 400; margin-top: 8px; }
+
+#scope { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 3;
+  background: radial-gradient(circle at center, transparent 0, transparent 34vh, #000 34.3vh); }
+#scope::before, #scope::after { content: ''; position: absolute; background: rgba(0,0,0,.85); }
+#scope::before { left: 50%; top: 16vh; width: 1px; height: 68vh; }
+#scope::after { top: 50%; left: calc(50% - 34vh); height: 1px; width: 68vh; }
+#scope.show { display: block; }
+
+.guide { font-size: 13px; opacity: .8; text-align: center; line-height: 1.6; max-width: 640px; }
+.vol { font-size: 13px; opacity: .8; display: flex; align-items: center; gap: 8px; }
