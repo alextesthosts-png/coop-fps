@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Co-op Arena FPS</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    { "imports": { "three": "/vendor/three/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="crosshair"></div>
+  <div id="hitmarker"></div>
+  <div id="damage"></div>
+
+  <div id="hud">
+    <div class="panel" id="health-panel">
+      <div class="label">HEALTH</div>
+      <div class="bar"><div id="health-fill"></div></div>
+      <div id="health-text">100</div>
+    </div>
+    <div class="panel" id="ammo-panel">
+      <div class="label">AMMO</div>
+      <div id="ammo-text">30 / ∞</div>
+      <div id="reload-text"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="wave-panel">
+    <div class="label">WAVE</div>
+    <div id="wave-text">–</div>
+    <div id="enemies-text"></div>
+  </div>
+
+  <div class="panel" id="players-panel">
+    <div class="label">PLAYERS</div>
+    <ul id="players-list"></ul>
+  </div>
+
+  <div id="banner"></div>
+  <div id="dead">YOU DIED<br /><span>Respawning…</span></div>
+
+  <div id="overlay">
+    <h1>CO-OP ARENA</h1>
+    <p>Survive the waves with your friends.</p>
+    <input id="name-input" maxlength="16" placeholder="Your name" />
+    <button id="play-btn">CLICK TO PLAY</button>
+    <div class="controls">
+      <b>WASD</b> move · <b>Mouse</b> look · <b>Space</b> jump · <b>Left-click</b> shoot · <b>R</b> reload · <b>Esc</b> pause
+    </div>
+    <div id="conn-status">Connecting…</div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
