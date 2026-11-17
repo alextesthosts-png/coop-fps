@@ -13,13 +13,17 @@
   <div id="crosshair"></div>
   <div id="hitmarker"></div>
   <div id="damage"></div>
+  <div id="hidden-vignette"></div>
   <div id="scope"></div>
   <div id="points"></div>
+
+  <canvas id="minimap" width="220" height="150"></canvas>
+  <div id="notices"></div>
 
   <div id="hud">
     <div class="panel" id="health-panel">
       <div id="perks"></div>
-      <div class="label">HEALTH</div>
+      <div class="label">HEALTH <span id="stance"></span></div>
       <div class="bar"><div id="health-fill"></div></div>
       <div id="health-text">100</div>
       <div class="bar thin" id="stamina-bar"><div id="stamina-fill"></div></div>
@@ -41,30 +45,42 @@
     <div id="wave-text">–</div>
     <div id="enemies-text"></div>
   </div>
+  <div id="boss-bar"><div id="boss-name">☠ BOSS</div><div class="bar"><div id="boss-fill"></div></div></div>
 
   <div class="panel" id="players-panel">
     <div class="label">PLAYERS</div>
     <ul id="players-list"></ul>
   </div>
 
-  <div id="notices"></div>
+  <div id="zone-name"></div>
   <div id="prompt"></div>
   <div id="banner"></div>
   <div id="dead">YOU DIED<br /><span>Respawning somewhere safe…</span><small id="dead-info"></small></div>
 
   <div id="overlay">
     <h1>CO-OP ARENA</h1>
-    <p>Survive the waves with your friends.</p>
+    <p>Survive the waves, open new areas, beat the bosses.</p>
     <input id="name-input" maxlength="16" placeholder="Your name" />
     <button id="play-btn">CLICK TO PLAY</button>
     <div class="controls">
-      <b>WASD</b> move · <b>Shift</b> sprint · <b>Space</b> jump · <b>Left-click</b> shoot · <b>Right-click</b> aim · <b>R</b> reload<br />
-      <b>1 / 2 / Wheel</b> switch weapon · <b>E</b> use / buy · <b>F</b> withdraw at bank · <b>G</b> give 100¢ to a teammate · <b>Esc</b> pause
+      <b>WASD</b> move · <b>Shift</b> sprint · <b>Space</b> jump / vault / climb · <b>C</b> crouch &amp; hide · <b>Left-click</b> shoot · <b>Right-click</b> aim · <b>R</b> reload<br />
+      <b>1 / 2 / 3 / Wheel</b> switch weapon · <b>E</b> use / buy / open doors · <b>F</b> withdraw at bank · <b>G</b> give 100¢ to a teammate · <b>Esc</b> pause
     </div>
-    <div class="guide">
-      Earn credits: <b>+10</b> hit · <b>+60</b> kill · <b>+100</b> headshot kill · bonus each wave.<br />
-      Spend them on the <b style="color:#40c4ff">Mystery Box</b> (950) and <b>perk machines</b> in the four corners.<br />
-      Dying costs 25% of your wallet and your perks — the <b style="color:#ffd54f">Bank</b> keeps credits safe and pays 5% interest per wave.
+    <div class="cols">
+      <div class="guide">
+        Earn credits: <b>+10</b> hit · <b>+60</b> kill · <b>+100</b> headshot · <b>+1000</b> boss kill.<br />
+        Spend them on the <b style="color:#40c4ff">Mystery Box</b>, <b>perk machines</b> and <b style="color:#ffd54f">gates</b> to the Forest, Village and Ruins.<br />
+        A <b style="color:#e040fb">boss</b> appears every 5 waves. Crouch in bushes or behind cover to hide.<br />
+        Dying costs 25% of your wallet and your perks — the <b style="color:#ffd54f">Bank</b> keeps credits safe.
+      </div>
+      <div class="savebox">
+        <div class="label">YOUR SAVE</div>
+        <div id="save-info">Connecting to your save…</div>
+        <div class="row"><input id="save-code" readonly title="Your save code — keep it to continue on another device" /><button id="copy-code">Copy</button></div>
+        <div class="row"><input id="load-input" placeholder="Paste a save code to load it" /><button id="load-code">Load</button></div>
+        <div class="label" style="margin-top:8px">TOP SURVIVORS</div>
+        <ul id="leaderboard"></ul>
+      </div>
     </div>
     <label class="vol">Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.6" /></label>
     <div id="conn-status">Connecting…</div>

@@ -121,11 +121,15 @@ export function switchWeapon() {
 }
 
 // ---------- Movement ----------
-export function footstep(pos, sprint = false) {
+const SURF = { grid: [450, 0.4], dirt: [380, 0.35], grass: [260, 0.2], stone: [900, 0.5] };
+export function footstep(pos, sprint = false, surface = 'grid', crouch = false) {
   if (!ok()) return;
-  const t = ctx.currentTime, dest = out(pos, pos ? 0.5 : 0.22);
-  noise(dest, t, sprint ? 0.09 : 0.11, { freq: 350 + Math.random() * 250, vol: 0.9, attack: 0.004 });
-  tone(dest, t, 0.06, { freq: 70 + Math.random() * 20, freqEnd: 40, vol: 0.4 });
+  const [f, thump] = SURF[surface] || SURF.grid;
+  const t = ctx.currentTime, dest = out(pos, (pos ? 0.5 : 0.22) * (crouch ? 0.4 : 1));
+  noise(dest, t, sprint ? 0.09 : 0.11, { freq: f + Math.random() * 250, vol: 0.9, attack: 0.004 });
+  if (surface === 'grass') noise(dest, t + 0.02, 0.12, { type: 'highpass', freq: 3000, vol: 0.25 });
+  if (surface === 'stone') noise(dest, t, 0.03, { type: 'bandpass', freq: 2500, q: 3, vol: 0.4 });
+  tone(dest, t, 0.06, { freq: 70 + Math.random() * 20, freqEnd: 40, vol: thump });
 }
 export function land() {
   if (!ok()) return;
@@ -242,4 +246,66 @@ export function waveClear() {
   if (!ok()) return;
   const t = ctx.currentTime, dest = out(null, 0.4);
   [523, 659, 784].forEach((f, i) => tone(dest, t + i * 0.1, 0.9, { type: 'triangle', freq: f, vol: 0.25 }));
+}
+
+// ---------- v3: world ----------
+export function vault() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.35);
+  noise(dest, t, 0.25, { type: 'bandpass', freq: 900, freqEnd: 400, q: 1, vol: 0.7, attack: 0.03 });
+  noise(dest, t + 0.05, 0.08, { freq: 500, vol: 0.6 });
+}
+export function crouch(down) {
+  if (!ok()) return;
+  noise(out(null, 0.18), ctx.currentTime, 0.12, { type: 'bandpass', freq: down ? 700 : 1100, q: 1.5, vol: 0.8, attack: 0.02 });
+}
+export function rustle(pos) {
+  if (!ok()) return;
+  noise(out(pos, 0.35), ctx.currentTime, 0.35, { type: 'highpass', freq: 2500, vol: 0.5, attack: 0.05 });
+}
+export function doorOpen(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.2);
+  noise(dest, t, 1.6, { freq: 180, vol: 0.9, attack: 0.1 });
+  tone(dest, t, 1.6, { type: 'sawtooth', freq: 55, freqEnd: 40, vol: 0.35, attack: 0.1 });
+  tone(dest, t + 0.1, 0.6, { type: 'triangle', freq: 300, freqEnd: 520, vol: 0.12 });
+  [392, 523, 659, 784].forEach((f, i) => tone(out(null, 0.35), t + 0.2 + i * 0.12, 0.5, { type: 'triangle', freq: f, vol: 0.3 }));
+}
+export function bossRoar(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.4);
+  const o = ctx.createOscillator(); o.type = 'sawtooth';
+  o.frequency.setValueAtTime(70, t); o.frequency.linearRampToValueAtTime(110, t + 0.4); o.frequency.linearRampToValueAtTime(45, t + 1.6);
+  const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = 30; lg.gain.value = 18; lfo.connect(lg).connect(o.frequency);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900; f.Q.value = 4;
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.8, t + 0.15); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.7);
+  o.connect(f).connect(g).connect(dest); o.start(t); lfo.start(t); o.stop(t + 1.8); lfo.stop(t + 1.8);
+  noise(dest, t, 1.4, { type: 'bandpass', freq: 400, q: 1, vol: 0.5, attack: 0.1 });
+}
+export function stomp(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.8);
+  tone(dest, t, 0.25, { freq: 60, freqEnd: 30, vol: 0.7 });
+  noise(dest, t, 0.15, { freq: 200, vol: 0.5 });
+}
+export function whoosh(pos) {
+  if (!ok()) return;
+  noise(out(pos, 0.8), ctx.currentTime, 0.9, { type: 'bandpass', freq: 300, freqEnd: 1200, q: 2, vol: 0.6, attack: 0.3 });
+}
+export function rockImpact(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.3);
+  noise(dest, t, 0.7, { freq: 900, freqEnd: 80, vol: 1 });
+  tone(dest, t, 0.5, { freq: 70, freqEnd: 25, vol: 0.9 });
+}
+export function crackle(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.5);
+  for (let i = 0; i < 4; i++) noise(dest, t + Math.random() * 0.4, 0.02, { type: 'highpass', freq: 2000 + Math.random() * 3000, vol: 0.5 });
+}
+export function bird(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.25);
+  const base = 2200 + Math.random() * 1500;
+  for (let i = 0; i < 2 + Math.floor(Math.random() * 3); i++) tone(dest, t + i * 0.13, 0.09, { freq: base, freqEnd: base * 1.4, vol: 0.2 });
 }
