@@ -222,3 +222,29 @@ export function bossModel(kind, size) {
   m.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); holder.userData.mats.push(o.material); } });
   return holder;
 }
+
+// Shop cashier: the adventurer without a backpack, wearing a shirt in the shop colour. Idle + Wave clips.
+const uniformMats = {};
+export function cashierModel(color, height = 1.75) {
+  const src = A.players.adventurer;
+  if (!src) return null;
+  const root = SkeletonUtils.clone(src.scene);
+  root.scale.setScalar(height / 1.82);
+  root.rotation.y = Math.PI;
+  const um = uniformMats[color] || (uniformMats[color] = new THREE.MeshStandardMaterial({ color, roughness: 0.85 }));
+  const swap = m => (m && /^(Green|LightGreen)$/.test(m.name)) ? um : m;
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    if (/backpack/i.test(o.name)) { o.visible = false; return; }
+    o.castShadow = false;
+    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+  });
+  const holder = new THREE.Group(); holder.add(root);
+  const mixer = new THREE.AnimationMixer(root);
+  const idle = clipByName(src.animations, 'Idle_Neutral') || clipByName(src.animations, 'Idle');
+  const wave = clipByName(src.animations, 'Wave');
+  const actions = {};
+  if (idle) actions.idle = mixer.clipAction(idle);
+  if (wave) { actions.wave = mixer.clipAction(wave); actions.wave.setLoop(THREE.LoopOnce, 1); actions.wave.clampWhenFinished = false; }
+  return { root: holder, mixer, actions };
+}

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import * as SFX from './audio.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { loadAssets, weaponModel, grenadeModel, crateModel, zombieModel, kenneyModel, playerModel, bossModel } from './assets.js';
+import { loadAssets, weaponModel, grenadeModel, crateModel, zombieModel, kenneyModel, playerModel, bossModel, cashierModel } from './assets.js';
+import { shopArt } from './shopart.js';
 
 // ================= Config =================
 const STAND_EYE = 1.6, CROUCH_EYE = 1.0, DOWN_EYE = 0.5;
@@ -590,6 +591,7 @@ function updateSky(dt) {
 
 // ---------- new decor ----------
 const DM = {
+  shopLight: new THREE.MeshBasicMaterial({ color: 0xfff6e0 }),
   sandRock: std(0xc2a27a, { flatShading: true }), dryBush: std(0x8d7a4a), awnPost: std(0x5d4037), water: new THREE.MeshStandardMaterial({ color: 0x2a7fb8, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.85 }),
   palm: std(0x7a5c3e), frond: std(0x4f8a3a, { side: THREE.DoubleSide }), frond2: std(0x3f7a2f, { side: THREE.DoubleSide }),
   steel: std(0x8a949c, { metalness: 0.8, roughness: 0.35 }), rust: std(0x7b4a32, { roughness: 0.8 }), glow: new THREE.MeshBasicMaterial({ color: 0xff7a1a }),
@@ -605,6 +607,47 @@ function signTex(text, bg, fg = '#fff') {
   const g = c.getContext('2d'); g.fillStyle = bg; g.fillRect(0, 0, 512, 96);
   g.font = 'bold 60px Segoe UI, sans-serif'; g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 256, 52);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const shopTexCache = {};
+function shopArtTex(name, accent) {
+  if (shopTexCache[name]) return shopTexCache[name];
+  const t = new THREE.CanvasTexture(shopArt(name, accent)); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return (shopTexCache[name] = t);
+}
+// Shop cashiers: animated NPCs that wave at players walking past
+const pendingCashiers = [], cashiers = [];
+function spawnCashiers() {
+  for (const c of pendingCashiers.splice(0)) {
+    const m = cashierModel(c.color, 1.85);
+    if (!m) continue;
+    m.root.position.set(c.x, c.y, c.z); m.root.rotation.y = c.yaw;
+    if (m.actions.idle) { m.actions.idle.time = Math.random() * 3; m.actions.idle.play(); }
+    scene.add(m.root);
+    cashiers.push({ ...c, m, waving: 0, cd: 0, rnd: performance.now() / 1000 + 4 + Math.random() * 20 });
+  }
+}
+function updateCashiers(dt) {
+  const now = performance.now() / 1000;
+  for (const c of cashiers) {
+    const dx = pos.x - c.x, dz = pos.z - c.z, dist = Math.hypot(dx, dz);
+    const vis = dist < 45 && Math.abs(feetY - c.y) < 3;
+    c.m.root.visible = vis;
+    if (!vis) continue;
+    const { idle, wave } = c.m.actions;
+    // turn a little toward a nearby player
+    let want = c.yaw;
+    if (dist < 14) { const a = Math.atan2(-dx, -dz), da = Math.atan2(Math.sin(a - c.yaw), Math.cos(a - c.yaw)); want = c.yaw + Math.max(-1, Math.min(1, da)); }
+    const cur = c.m.root.rotation.y; c.m.root.rotation.y = cur + Math.atan2(Math.sin(want - cur), Math.cos(want - cur)) * Math.min(1, dt * 3);
+    if (wave && idle) {
+      if (!c.waving && ((dist < 10 && now > c.cd) || now > c.rnd)) {
+        idle.fadeOut(0.25); wave.reset().setEffectiveWeight(1).fadeIn(0.25).play();
+        c.waving = 1; c.cd = now + 9; c.rnd = now + 12 + Math.random() * 20;
+      } else if (c.waving && (wave.time >= wave.getClip().duration - 0.3 || !wave.isRunning())) {
+        wave.fadeOut(0.3); idle.reset().setEffectiveWeight(1).fadeIn(0.3).play(); c.waving = 0;
+      }
+    }
+    c.m.mixer.update(dt);
+  }
 }
 function buildDecor7(d) {
   const y0 = d.y || 0;
@@ -820,13 +863,38 @@ function buildDecor7(d) {
       return m;
     }
     case 'shop': {
-      const [x, z, w, dd, top, bottom] = d.b, h = top - bottom;
-      const body = texBox(d.b, wallMat('plaster'), 3);
-      const fz = z + d.face * (dd / 2 + 0.03);
-      const glass = new THREE.Mesh(new THREE.PlaneGeometry(w - 1.4, h - 1.4), new THREE.MeshStandardMaterial({ color: d.color, emissive: d.color, emissiveIntensity: 0.35, roughness: 0.1, metalness: 0.4 }));
-      glass.position.set(x, bottom + (h - 1.4) / 2 + 0.1, fz); if (d.face < 0) glass.rotation.y = Math.PI; scene.add(glass);
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(w - 1, 0.9), new THREE.MeshBasicMaterial({ map: signTex(d.name, '#1b1b1b', hex(d.color)) }));
-      sign.position.set(x, top - 0.6, fz + d.face * 0.01); if (d.face < 0) sign.rotation.y = Math.PI; scene.add(sign);
+      // open storefront: shell + glass window, themed back-wall art, counter and a cashier
+      const [x, z, w, dd, top, bottom] = d.b, h = top - bottom, f = d.face, t = 0.3;
+      const shell = wallMat('plaster');
+      const body = texBox([x, z - f * (dd / 2 - t / 2), w, t, top, bottom], shell, 3);
+      for (const sx of [-1, 1]) texBox([x + sx * (w / 2 - t / 2), z, t, dd, top, bottom], shell, 3);
+      texBox([x, z, w, dd, top, top - 0.35], shell, 3);
+      const fz = z + f * (dd / 2 - t / 2);
+      texBox([x, fz, w, t, top - 0.35, top - 1.25], shell, 3);
+      texBox([x, fz, w, t, bottom + 0.35, bottom], wallMat('metal'), 2);
+      const fl = floorMesh('tiles', w - 2 * t, dd - t, 3); fl.rotation.x = -Math.PI / 2; fl.position.set(x, bottom + 0.02, z - f * t / 2); fl.receiveShadow = true; scene.add(fl);
+      const facing = m => { if (f < 0) m.rotation.y = Math.PI; return m; };
+      const accent = hex(d.color);
+      const artTex = shopArtTex(d.name, accent);
+      const art = facing(new THREE.Mesh(new THREE.PlaneGeometry(w - 2 * t - 0.1, h - 0.75), new THREE.MeshBasicMaterial({ map: artTex })));
+      art.position.set(x, bottom + 0.4 + (h - 0.75) / 2, z - f * (dd / 2 - t - 0.02)); scene.add(art);
+      const gh = h - 1.25 - 0.35;
+      const glass = facing(new THREE.Mesh(new THREE.PlaneGeometry(w - 2 * t, gh), wallMat('glass')));
+      glass.position.set(x, bottom + 0.35 + gh / 2, z + f * (dd / 2 - 0.06)); scene.add(glass);
+      const frame = new THREE.MeshStandardMaterial({ color: 0x37474f, metalness: 0.7, roughness: 0.3 });
+      for (const fx of [-w / 2 + t, -w / 6, w / 6, w / 2 - t]) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, gh, 0.12), frame); m.position.set(x + fx, bottom + 0.35 + gh / 2, z + f * (dd / 2 - 0.06)); scene.add(m); }
+      const sign = facing(new THREE.Mesh(new THREE.PlaneGeometry(w - 1, 0.8), new THREE.MeshBasicMaterial({ map: signTex(d.name, '#1b1b1b', accent) })));
+      sign.position.set(x, top - 0.8, z + f * (dd / 2 + 0.02)); scene.add(sign);
+      for (const lx of [-w / 4, w / 4]) { const lp = new THREE.Mesh(new THREE.PlaneGeometry(w / 2 - 1.2, 0.5), DM.shopLight); lp.rotation.x = Math.PI / 2; lp.position.set(x + lx, top - 0.37, z - f * 0.8); scene.add(lp); }
+      // counter with a till, display table with goods
+      const cx = x + 2.6;
+      texBox([cx, z - f * 0.4, 3.4, 0.9, bottom + 0.82, bottom], wallMat('wood'), 1.5);
+      texBox([cx, z - f * 0.4, 3.6, 1.05, bottom + 0.9, bottom + 0.82], wallMat('marble'), 2);
+      const till = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.4), M.metal); till.position.set(cx + 1.1, bottom + 1.05, z - f * 0.4); scene.add(till);
+      texBox([x - 2.8, z + f * 0.6, 3, 1.4, bottom + 0.8, bottom], wallMat('wood'), 1.5);
+      const goods = new THREE.MeshStandardMaterial({ color: d.color, roughness: 0.5 });
+      for (let i = 0; i < 4; i++) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.3 + hash(x, z, i) * 0.4, 0.45), i % 2 ? goods : M.metal); m.position.set(x - 3.9 + i * 0.75, bottom + 0.8 + m.geometry.parameters.height / 2, z + f * 0.6); scene.add(m); }
+      pendingCashiers.push({ x: cx - 0.3, z: z - f * 1.35, y: bottom, yaw: f > 0 ? Math.PI : 0, color: d.color });
       return body;
     }
     case 'planter': {
@@ -953,6 +1021,7 @@ function buildWorld() {
   const roots = scene.children.slice(before).filter(o => !keep.has(o) && !o.isLight);
   const st = mergeStatic(roots);
   console.log('[world] merged', st.meshes, 'decor meshes into', st.merged);
+  spawnCashiers();
   buildDoors();
   buildStations();
   buildHelicopter();
@@ -3671,6 +3740,7 @@ function reloadPose(W) {
 
 // ---------- per-frame updates ----------
 function updateExtras(dt, t) {
+  if (cashiers.length) updateCashiers(dt);
   if (!questObjs) return;
   for (const r of radioObjs) { r.note.visible = radioSt.on; r.note.position.y = 1.5 + ((t * 0.6 + r.g.position.x) % 1) * 0.8; r.note.material.opacity = 1 - ((t * 0.6 + r.g.position.x) % 1); r.body.scale.y = radioSt.on ? 1 + Math.abs(Math.sin(t * 8)) * 0.012 : 1; }
   for (const tb of Object.values(tombObjs)) { tb.g.userData.ring.material.opacity = 0.4 + Math.sin(t * 4) * 0.3; tb.g.rotation.y += dt * 0.3; }
