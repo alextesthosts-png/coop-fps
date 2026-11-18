@@ -20,16 +20,25 @@ app.use('/vendor/three-addons', express.static(path.join(__dirname, 'node_module
 app.get('/health', (_req, res) => res.send('ok'));
 
 // ================= World =================
-const MAP = buildMap();
-if (process.env.ESC_FAST) for (const e of Object.values(MAP.escapes)) Object.assign(e, { defendMs: 4000, boardMs: 4000, minWave: 1, cost: 2000 }); // testing
-const B = MAP.bounds;
-const DESTRUCTIBLE = new Set(MAP.destructible);
+// The map can change between runs, so everything derived from it lives in `let`s rebuilt by loadMap().
+const { MAP_LIST } = require('./map');
+let MAP, B, DESTRUCTIBLE, LAYERS, NL, GW, GH, N;
+let blocked, support, flow, queue, rampCell;
 const openDoors = new Set();
 const destroyed = new Set(); // obstacle indices smashed by the Juggernaut
-let openZones = new Set(['main']);
-
+let openZones = new Set();
+function loadMap(id) {
+  MAP = JSON.parse(JSON.stringify(buildMap(id))); // private copy (tests may tweak escapes)
+  if (process.env.ESC_FAST) for (const e of Object.values(MAP.escapes)) Object.assign(e, { defendMs: 4000, boardMs: 4000, minWave: 1, cost: 2000 });
+  B = MAP.bounds; DESTRUCTIBLE = new Set(MAP.destructible);
+  LAYERS = MAP.layers; NL = LAYERS.length;
+  GW = Math.ceil(B.x2 - B.x1); GH = Math.ceil(B.z2 - B.z1); N = GW * GH;
+  blocked = new Uint8Array(N * NL); support = new Uint8Array(N * NL); flow = new Int32Array(N * NL); queue = new Int32Array(N * NL);
+  rampCell = new Int16Array(N).fill(-1);
+}
+const layerY = L => LAYERS[L] ? LAYERS[L].y : 0;
 function recomputeZones() {
-  openZones = new Set(['main']);
+  openZones = new Set([MAP.zones[0].id]);
   let changed = true;
   while (changed) {
     changed = false;
@@ -43,12 +52,13 @@ function recomputeZones() {
 }
 const zoneOpen = id => openZones.has(id);
 
-// Spatial hash of solid boxes (static obstacles + locked gates)
+// Spatial hash of solid boxes (static obstacles + locked gates). Obstacle = [x, z, w, d, top, bottom=0, flag]
 const CELL = 8;
 let obstacles = [], buckets = new Map();
+const bot = o => o[5] || 0;
 function rebuildObstacles() {
   obstacles = MAP.obstacles.filter((o, i) => !destroyed.has(i) && !(i === MAP.rubbleIdx && quest.rubble));
-  obstacles.push(...MAP.doors.filter(d => !openDoors.has(d.id)).map(d => [d.x, d.z, d.w, d.d, MAP.wallH]));
+  obstacles.push(...MAP.doors.filter(d => !openDoors.has(d.id)).map(d => [d.x, d.z, d.w, d.d, (d.y || 0) + MAP.wallH, d.y || 0]));
   buckets = new Map();
   for (const o of obstacles) {
     const [x, z, w, d] = o, m = 1.5;
@@ -62,19 +72,32 @@ function rebuildObstacles() {
   recomputeZones();
   buildNavGrid();
 }
-function obstacleAt(x, z, margin) {
+// First solid box overlapping (x, z) ± margin within the height band [y0, y1]. Escalator steps are ignored unless `steps`.
+function obstacleAt(x, z, margin, y0 = -1e9, y1 = 1e9, steps = false) {
   const list = buckets.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
   if (!list) return null;
-  for (const o of list) if (Math.abs(x - o[0]) < o[2] / 2 + margin && Math.abs(z - o[1]) < o[3] / 2 + margin) return o;
+  for (const o of list) {
+    if (o[6] === 'r' && !steps) continue;
+    if (bot(o) >= y1 || o[4] <= y0) continue;
+    if (Math.abs(x - o[0]) < o[2] / 2 + margin && Math.abs(z - o[1]) < o[3] / 2 + margin) return o;
+  }
   return null;
 }
-const insideObstacle = (x, z, margin) => !!obstacleAt(x, z, margin);
-// 2D line of sight against obstacles at least minH tall; returns the clear fraction (1 = fully clear)
-function losT(ax, az, bx, bz, minH) {
-  const dx = bx - ax, dz = bz - az;
+const insideObstacle = (x, z, margin, y = 0) => !!obstacleAt(x, z, margin, y + 0.35, y + 1.8);
+// Highest walkable surface under (x, z) at or below height y (ground = 0)
+function floorAt(x, z, y) {
+  const list = buckets.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
+  let g = 0;
+  if (list) for (const o of list) if (o[4] <= y + 0.3 && o[4] > g && Math.abs(x - o[0]) < o[2] / 2 && Math.abs(z - o[1]) < o[3] / 2) g = o[4];
+  return g;
+}
+// 2D line of sight at height `base + minH`; returns the clear fraction (1 = fully clear)
+function losT(ax, az, bx, bz, minH, base = 0) {
+  const dx = bx - ax, dz = bz - az, hy = base + minH;
   let best = 1;
-  for (const [ox, oz, w, d, h] of obstacles) {
-    if (h < minH) continue;
+  for (const o of obstacles) {
+    const [ox, oz, w, d, h] = o;
+    if (h < hy || bot(o) > hy || o[6] === 'r') continue;
     let t0 = 0, t1 = 1;
     const x1 = ox - w / 2, x2 = ox + w / 2, z1 = oz - d / 2, z2 = oz + d / 2;
     if (Math.abs(dx) < 1e-9) { if (ax < x1 || ax > x2) continue; }
@@ -85,64 +108,122 @@ function losT(ax, az, bx, bz, minH) {
   }
   return best;
 }
-const los = (ax, az, bx, bz, minH) => losT(ax, az, bx, bz, minH) >= 1;
-const zoneAt = (x, z) => MAP.zones.find(q => x >= q.x1 && x <= q.x2 && z >= q.z1 && z <= q.z2);
+const los = (ax, az, bx, bz, minH, base = 0) => losT(ax, az, bx, bz, minH, base) >= 1;
+// LOS between two actors: only on the same floor
+const seeEach = (a, b, minH) => (a.layer || 0) === (b.layer || 0) && los(a.x, a.z, b.x, b.z, minH, layerY(a.layer || 0));
+const zoneAt = (x, z, L = 0) => MAP.zones.find(q => (q.layer || 0) === L && x >= q.x1 && x <= q.x2 && z >= q.z1 && z <= q.z2);
 const inBush = (x, z) => MAP.bushes.some(([bx, bz, r]) => (x - bx) ** 2 + (z - bz) ** 2 < r * r);
 
-// ================= Navigation: grid + flow field =================
-const GW = B.x2 - B.x1, GH = B.z2 - B.z1;
-const blocked = new Uint8Array(GW * GH);
-const flow = new Int32Array(GW * GH).fill(-1);
-const queue = new Int32Array(GW * GH);
+// ---- escalators ----
+function rampAt(x, z) {
+  for (const r of MAP.ramps) {
+    const along = r.dir[0] === 'x' ? r.len : r.wid, across = r.dir[0] === 'x' ? r.wid : r.len;
+    if (Math.abs(x - r.x) <= along / 2 && Math.abs(z - r.z) <= across / 2) return r;
+  }
+  return null;
+}
+function rampY(r, x, z) {
+  const sgn = r.dir[1] === '+' ? 1 : -1, off = r.dir[0] === 'x' ? x - r.x : z - r.z;
+  const t = Math.max(0, Math.min(1, sgn * off / r.len + 0.5));
+  return r.y0 + (r.y1 - r.y0) * t;
+}
+// Height an actor on floor L stands at (x, z)
+function heightAt(L, x, z) {
+  const r = rampAt(x, z);
+  if (r && (r.from === L || r.to === L)) return rampY(r, x, z);
+  return layerY(L);
+}
+// Which floor a player is on, from their feet height
+function layerOf(x, z, feet) {
+  const r = rampAt(x, z);
+  if (r) return feet - r.y0 > (r.y1 - r.y0) / 2 ? r.to : r.from;
+  let best = 0;
+  for (let L = 0; L < NL; L++) if (feet >= layerY(L) - 0.6) best = L;
+  return best;
+}
+
+// ================= Navigation: layered grid + flow field =================
 const cellOf = (x, z) => {
   const ix = Math.floor(x - B.x1), iz = Math.floor(z - B.z1);
   return ix < 0 || iz < 0 || ix >= GW || iz >= GH ? -1 : iz * GW + ix;
 };
+// nav cells keep 0.8 m from solids (0.15 m from thin railings) so zombies don't scrape corners
+function navBlocked(x, z, hy) {
+  const list = buckets.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
+  if (!list) return false;
+  for (const o of list) {
+    if (o[6] === 'r' || bot(o) >= hy + 1.8 || o[4] <= hy + 0.35) continue;
+    const m = o[6] === 'w' ? 0.15 : 0.8;
+    if (Math.abs(x - o[0]) < o[2] / 2 + m && Math.abs(z - o[1]) < o[3] / 2 + m) return true;
+  }
+  return false;
+}
 function buildNavGrid() {
-  for (let iz = 0; iz < GH; iz++) for (let ix = 0; ix < GW; ix++) {
-    const x = B.x1 + ix + 0.5, z = B.z1 + iz + 0.5;
-    blocked[iz * GW + ix] = (!zoneAt(x, z) || insideObstacle(x, z, 0.8)) ? 1 : 0;
+  rampCell.fill(-1);
+  MAP.ramps.forEach((r, i) => {
+    for (let iz = 0; iz < GH; iz++) for (let ix = 0; ix < GW; ix++) { const x = B.x1 + ix + 0.5, z = B.z1 + iz + 0.5; if (rampAt(x, z) === r) rampCell[iz * GW + ix] = i; }
+  });
+  for (let L = 0; L < NL; L++) {
+    const y = layerY(L), off = L * N;
+    for (let iz = 0; iz < GH; iz++) for (let ix = 0; ix < GW; ix++) {
+      const c = iz * GW + ix, x = B.x1 + ix + 0.5, z = B.z1 + iz + 0.5;
+      const ri = rampCell[c], r = ri >= 0 ? MAP.ramps[ri] : null;
+      const onRamp = r && (r.from === L || r.to === L);
+      const sup = L === 0 || onRamp || Math.abs(floorAt(x, z, y) - y) < 0.05;
+      support[off + c] = sup ? 1 : 0;
+      const hy = onRamp ? rampY(r, x, z) : y;
+      blocked[off + c] = (!sup || !zoneAt(x, z, L) || navBlocked(x, z, hy)) ? 1 : 0;
+    }
   }
 }
 function computeFlow(sources) {
   flow.fill(-1);
   let head = 0, tail = 0;
   for (const s of sources) {
-    const c0 = cellOf(s.x, s.z);
+    const c0 = cellOf(s.x, s.z), L = s.layer || 0;
     if (c0 < 0) continue;
     const sx = c0 % GW, sz = (c0 / GW) | 0;
     for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) {
       const x = sx + dx, z = sz + dz;
       if (x < 0 || z < 0 || x >= GW || z >= GH) continue;
-      const c = z * GW + x;
+      const c = L * N + z * GW + x;
       if (blocked[c] || flow[c] !== -1) continue;
       flow[c] = Math.max(Math.abs(dx), Math.abs(dz)); queue[tail++] = c;
     }
   }
+  const push = (n, nd) => { if (!blocked[n] && flow[n] === -1) { flow[n] = nd; queue[tail++] = n; } };
   while (head < tail) {
-    const c = queue[head++], x = c % GW, z = (c / GW) | 0, nd = flow[c] + 1;
-    if (x > 0 && !blocked[c - 1] && flow[c - 1] === -1) { flow[c - 1] = nd; queue[tail++] = c - 1; }
-    if (x < GW - 1 && !blocked[c + 1] && flow[c + 1] === -1) { flow[c + 1] = nd; queue[tail++] = c + 1; }
-    if (z > 0 && !blocked[c - GW] && flow[c - GW] === -1) { flow[c - GW] = nd; queue[tail++] = c - GW; }
-    if (z < GH - 1 && !blocked[c + GW] && flow[c + GW] === -1) { flow[c + GW] = nd; queue[tail++] = c + GW; }
+    const c = queue[head++], L = (c / N) | 0, cc = c - L * N, x = cc % GW, z = (cc / GW) | 0, nd = flow[c] + 1;
+    if (x > 0) push(c - 1, nd);
+    if (x < GW - 1) push(c + 1, nd);
+    if (z > 0) push(c - GW, nd);
+    if (z < GH - 1) push(c + GW, nd);
+    const ri = rampCell[cc];
+    if (ri >= 0) { const r = MAP.ramps[ri]; const other = r.from === L ? r.to : r.to === L ? r.from : -1; if (other >= 0) push(other * N + cc, nd); }
   }
 }
-function flowStep(x, z) {
-  const c = cellOf(x, z);
-  if (c < 0) return null;
-  const cx = c % GW, cz = (c / GW) | 0;
-  let best = flow[c] === -1 ? 1e9 : flow[c], bx = -1, bz = -1;
+// Next waypoint for an actor on floor L at (x, z): {x, z, layer}
+function flowStep(x, z, L = 0) {
+  const cc = cellOf(x, z);
+  if (cc < 0) return null;
+  const c = L * N + cc, cx = cc % GW, cz = (cc / GW) | 0;
+  let best = flow[c] === -1 ? 1e9 : flow[c], bx = -1, bz = -1, bl = L;
   for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
     if (!dx && !dz) continue;
     const nx = cx + dx, nz = cz + dz;
     if (nx < 0 || nz < 0 || nx >= GW || nz >= GH) continue;
-    const n = nz * GW + nx;
+    const n = L * N + nz * GW + nx;
     if (blocked[n] || flow[n] === -1) continue;
-    if (dx && dz && (blocked[cz * GW + nx] || blocked[nz * GW + cx])) continue;
+    if (dx && dz && (blocked[L * N + cz * GW + nx] || blocked[L * N + nz * GW + cx])) continue;
     const v = flow[n] + (dx && dz ? 0.4 : 0);
-    if (v < best) { best = v; bx = nx; bz = nz; }
+    if (v < best) { best = v; bx = nx; bz = nz; bl = L; }
   }
-  return bx < 0 ? null : { x: B.x1 + bx + 0.5, z: B.z1 + bz + 0.5 };
+  const ri = rampCell[cc];
+  if (ri >= 0) {
+    const r = MAP.ramps[ri], other = r.from === L ? r.to : r.to === L ? r.from : -1;
+    if (other >= 0 && flow[other * N + cc] !== -1 && flow[other * N + cc] < best) { best = flow[other * N + cc]; bx = cx; bz = cz; bl = other; }
+  }
+  return bx < 0 ? null : { x: B.x1 + bx + 0.5, z: B.z1 + bz + 0.5, layer: bl };
 }
 
 // ================= Weapons =================
@@ -244,14 +325,18 @@ const now = () => Date.now();
 const D = () => DIFF[difficulty];
 const standing = p => p.alive && !p.downed;
 
+function walkable(L, x, z) { const c = cellOf(x, z); return c >= 0 && !!support[L * N + c] && !!zoneAt(x, z, L); }
 function randomOpenPoint(margin) {
   const open = MAP.zones.filter(z => zoneOpen(z.id));
-  for (let i = 0; i < 60; i++) {
-    const z = open[Math.floor(Math.random() * open.length)];
+  for (let i = 0; i < 80; i++) {
+    const z = open[Math.floor(Math.random() * open.length)], L = z.layer || 0;
     const x = rnd(z.x1 + 3, z.x2 - 3), zz = rnd(z.z1 + 3, z.z2 - 3);
-    if (!insideObstacle(x, zz, margin) && !inBush(x, zz)) return { x, z: zz };
+    if (rampAt(x, zz) || !walkable(L, x, zz)) continue;
+    const y = layerY(L);
+    if (!insideObstacle(x, zz, margin, y) && !inBush(x, zz)) return { x, z: zz, layer: L, y };
   }
-  return { x: 0, z: 3 };
+  const z0 = MAP.zones[0];
+  return { x: (z0.x1 + z0.x2) / 2 + 3, z: (z0.z1 + z0.z2) / 2 + 3, layer: 0, y: 0 };
 }
 
 function safeSpawn() {
@@ -263,7 +348,7 @@ function safeSpawn() {
     for (const e of es) score = Math.min(score, Math.sqrt(dist2(c, e)));
     if (score > bestScore) { bestScore = score; best = c; }
   }
-  return { x: best.x, y: 1.6, z: best.z };
+  return { x: best.x, y: best.y + 1.6, z: best.z, layer: best.layer };
 }
 
 function weightedPick(pool) {
@@ -281,6 +366,8 @@ function award(p, amount, reason) {
   io.to(p.id).emit('points', { amount, reason });
 }
 function near(p, x, z, r) { return (p.x - x) ** 2 + (p.z - z) ** 2 <= r * r; }
+// near in 2D and on roughly the same height as the object (stations and items on upper floors)
+function nearY(p, o, r, dy = 2.6) { return near(p, o.x, o.z, r) && Math.abs(feetOf(p) - (o.y || 0)) < dy; }
 const maxSlots = p => (p.perks.mule ? 3 : 2);
 
 function publicPlayer(p) {
@@ -324,9 +411,9 @@ function spawnPointForEnemy(minDist) {
     const eu = ps.length ? Math.min(...ps.map(p => Math.sqrt(dist2(p, c)))) : 99;
     if (eu > bestD) { bestD = eu; best = c; }
     if (eu < minDist) continue;
-    const cell = cellOf(c.x, c.z), pathD = cell >= 0 ? flow[cell] : -1;
+    const cell = cellOf(c.x, c.z), pathD = cell >= 0 ? flow[c.layer * N + cell] : -1;
     if (pathD !== -1 && pathD < minDist) continue;
-    if (ps.some(p => near(p, c.x, c.z, 35) && los(p.x, p.z, c.x, c.z, 1.6))) continue;
+    if (ps.some(p => near(p, c.x, c.z, 35) && seeEach(p, c, 1.6))) continue;
     return c;
   }
   return best || randomOpenPoint(1.2);
@@ -353,7 +440,7 @@ function addEnemy(type, at, bossKind) {
     default:        e = { type: 'brute', hp: 50 + wave * 10, speed: 3 + sp, r: 0.45, dmg: 15, cd: 1 };
   }
   e.hp = Math.round(e.hp * D().hp);
-  enemies[id] = { id, ...pos, ...e, maxHp: e.hp, attackCd: 0, slide: Math.random() < 0.5 ? 1 : -1, wander: null, beam: null, frost: 0, frozenUntil: 0, lastFrostHit: 0, baseMult: D().hp };
+  enemies[id] = { id, layer: pos.layer || 0, y: pos.y || 0, ...pos, ...e, maxHp: e.hp, attackCd: 0, slide: Math.random() < 0.5 ? 1 : -1, wander: null, beam: null, frost: 0, frozenUntil: 0, lastFrostHit: 0, baseMult: D().hp };
   return enemies[id];
 }
 
@@ -371,14 +458,14 @@ function rollEnemyType() {
   return 'brute';
 }
 
-function dropPower(x, z, type) {
+function dropPower(x, z, type, y = 0) {
   const id = 'pu' + (++projSeq);
-  powerDrops[id] = { id, type, x, z, until: now() + 25000 };
+  powerDrops[id] = { id, type, x, z, y, until: now() + 25000 };
   io.emit('puSpawn', powerDrops[id]);
 }
 function maybeDrop(e) {
-  if (e.type === 'boss') return dropPower(e.x, e.z, 'maxammo');
-  if (Math.random() < 0.035 * D().drop) dropPower(e.x, e.z, weightedPick([['double', 30], ['maxammo', 30], ['insta', 25], ['nuke', 15]]));
+  if (e.type === 'boss') return dropPower(e.x, e.z, 'maxammo', e.y);
+  if (Math.random() < 0.035 * D().drop) dropPower(e.x, e.z, weightedPick([['double', 30], ['maxammo', 30], ['insta', 25], ['nuke', 15]]), e.y);
 }
 
 function killEnemy(e, p, how) {
@@ -396,10 +483,10 @@ function killEnemy(e, p, how) {
   if (e.type === 'exploder') zombieBlast(e);
   // blown-up walkers keep crawling
   if (e.type === 'brute' && (how === 'explosion' || how === 'fire') && Math.random() < 0.35) {
-    const c = addEnemy('crawler', { x: e.x, z: e.z });
+    const c = addEnemy('crawler', { x: e.x, z: e.z, layer: e.layer, y: e.y });
     c.hp = c.maxHp = Math.max(20, Math.round(c.hp * 0.5));
   }
-  if (dogRound && !Object.values(enemies).some(x => x.type === 'hound')) { dogRound = false; dropPower(e.x, e.z, 'maxammo'); }
+  if (dogRound && !Object.values(enemies).some(x => x.type === 'hound')) { dogRound = false; dropPower(e.x, e.z, 'maxammo', e.y); }
   else maybeDrop(e);
   if (Object.keys(enemies).length === 0 && esc.phase !== 'defend') scheduleWave(6000);
 }
@@ -420,14 +507,14 @@ function explode(x, y, z, r, dmg, owner, type) {
   let hitAny = false;
   for (const e of Object.values(enemies)) {
     const d = Math.hypot(e.x - x, e.z - z) - e.r * 0.5;
-    if (d > r || y > (e.type === 'boss' ? 6 : 3.5)) continue;
+    if (d > r || y - e.y > (e.type === 'boss' ? 6 : 3.5) || e.y - y > 2.5) continue;
     const f = 1 - Math.max(0, d) / r * 0.7;
     hurtEnemy(e, dmg * f * (p && p.perks.dtap ? 1.25 : 1), p, 'explosion');
     hitAny = true;
   }
   if (hitAny && p) award(p, 10, 'Hit');
   // explosions near the crypt rubble clear the tunnel escape
-  if (!quest.rubble && Math.hypot(x - MAP.rubble.x, z - MAP.rubble.z) < 6) {
+  if (MAP.rubble && !quest.rubble && Math.hypot(x - MAP.rubble.x, z - MAP.rubble.z) < 6 && Math.abs(y - (MAP.rubble.y || 0)) < 4) {
     quest.rubbleHits++;
     if (quest.rubbleHits >= 3) {
       quest.rubble = true;
@@ -440,9 +527,9 @@ function explode(x, y, z, r, dmg, owner, type) {
 
 // Exploder zombies burst and hurt everyone close by
 function zombieBlast(e) {
-  io.emit('boom', { x: e.x, y: 1, z: e.z, r: 4, type: 'bile' });
-  for (const p of Object.values(players)) if (standing(p) && !p.perks.phd && near(p, e.x, e.z, 4)) damagePlayer(p, 35, { x: e.x, z: e.z });
-  for (const o of Object.values(enemies)) if (o !== e && near(o, e.x, e.z, 4)) hurtEnemy(o, 80, null, 'explosion');
+  io.emit('boom', { x: e.x, y: e.y + 1, z: e.z, r: 4, type: 'bile' });
+  for (const p of Object.values(players)) if (standing(p) && !p.perks.phd && nearY(p, e, 4, 3)) damagePlayer(p, 35, { x: e.x, z: e.z });
+  for (const o of Object.values(enemies)) if (o !== e && near(o, e.x, e.z, 4) && Math.abs(o.y - e.y) < 3) hurtEnemy(o, 80, null, 'explosion');
 }
 
 function startWave() {
@@ -456,7 +543,7 @@ function startWave() {
     count = Math.min(6 + wave, 30);
     for (let i = 0; i < count; i++) {
       const at = spawnPointForEnemy(16);
-      setTimeout(() => { if (!resetting) { const h = addEnemy('hound', at); io.emit('lightning', { x: h.x, z: h.z }); } }, i * 250);
+      setTimeout(() => { if (!resetting) { const h = addEnemy('hound', at); io.emit('lightning', { x: h.x, z: h.z, y: h.y }); } }, i * 250);
     }
   } else {
     count = Math.min(3 + wave * 2, 34);
@@ -490,7 +577,7 @@ function spawnMedkit() {
   if (Object.keys(medkits).length >= MAX_MEDKITS || !Object.keys(players).length) return;
   const c = randomOpenPoint(1.2);
   const id = 'm' + (++medSeq);
-  medkits[id] = { id, x: c.x, z: c.z };
+  medkits[id] = { id, x: c.x, z: c.z, y: c.y };
   io.emit('medkitSpawn', medkits[id]);
 }
 setInterval(spawnMedkit, 15000);
@@ -514,8 +601,9 @@ function detonate(pr) {
   else if (pr.type === 'monkey') explode(pr.x, pr.y, pr.z, 7.5, 1500, pr.owner, 'monkey');
   else if (pr.type === 'molotov') {
     const id = 'f' + (++projSeq);
-    fires[id] = { id, x: pr.x, z: pr.z, r: 4, until: now() + 7000, owner: pr.owner };
-    io.emit('fireStart', { id, x: pr.x, z: pr.z, r: 4, ms: 7000 });
+    const fy = floorAt(pr.x, pr.z, pr.y);
+    fires[id] = { id, x: pr.x, z: pr.z, y: fy, r: 4, until: now() + 7000, owner: pr.owner };
+    io.emit('fireStart', { id, x: pr.x, z: pr.z, y: fy, r: 4, ms: 7000 });
   }
 }
 function stepProj(pr, dt) {
@@ -528,16 +616,15 @@ function stepProj(pr, dt) {
       if (Math.hypot(e.x - nx, e.z - nz) < e.r + 0.4 && ny < (e.type === 'boss' ? 5 : 2.4)) { pr.x = nx; pr.y = ny; pr.z = nz; return detonate(pr); }
     }
   }
-  const o = obstacleAt(nx, nz, 0.12);
-  if (o && ny < o[4]) {
+  const o = obstacleAt(nx, nz, 0.12, ny - 0.05, ny + 0.05, true);
+  if (o) {
     if (burstOnContact) { pr.y = ny; return detonate(pr); }
-    if (!obstacleAt(nx, pr.z, 0.12)) pr.vz *= -0.4; else if (!obstacleAt(pr.x, nz, 0.12)) pr.vx *= -0.4; else { pr.vx *= -0.4; pr.vz *= -0.4; }
+    if (!obstacleAt(nx, pr.z, 0.12, ny - 0.05, ny + 0.05, true)) pr.vz *= -0.4; else if (!obstacleAt(pr.x, nz, 0.12, ny - 0.05, ny + 0.05, true)) pr.vx *= -0.4; else { pr.vx *= -0.4; pr.vz *= -0.4; }
     pr.vx *= 0.6; pr.vz *= 0.6;
     return;
   }
   pr.x = nx; pr.y = ny; pr.z = nz;
-  const under = obstacleAt(pr.x, pr.z, 0);
-  const floor = (under ? under[4] : 0) + 0.12;
+  const floor = floorAt(pr.x, pr.z, pr.y) + 0.12;
   if (pr.y <= floor) {
     pr.y = floor;
     if (burstOnContact) return detonate(pr);
@@ -551,7 +638,7 @@ function stepProj(pr, dt) {
   }
   if (Math.abs(pr.x) > 200 || Math.abs(pr.z) > 200 || pr.y > 80) { delete projs[pr.id]; io.emit('projGone', { id: pr.id }); }
 }
-const activeMonkeys = () => Object.values(projs).filter(p => p.type === 'monkey' && p.rest);
+const activeMonkeys = () => Object.values(projs).filter(p => p.type === 'monkey' && p.rest).map(p => (p.layer === undefined ? Object.assign(p, { layer: layerOf(p.x, p.z, p.y - 0.12) }) : p));
 
 // ================= Escape routes (end game) =================
 function escState() {
@@ -569,7 +656,7 @@ function escapeTick(dt) {
   if (esc.phase === 'defend') {
     // the countdown only runs while someone holds the area
     const t = R.terminal;
-    esc.paused = !Object.values(players).some(p => standing(p) && near(p, t.x, t.z, 20));
+    esc.paused = !Object.values(players).some(p => standing(p) && nearY(p, t, 20, 4));
     if (!esc.paused) esc.left -= dt * 1000;
     if (esc.left <= 0) {
       setEscPhase('board', R.boardMs);
@@ -577,7 +664,7 @@ function escapeTick(dt) {
     }
   } else if (esc.phase === 'board' && now() >= esc.until) {
     const pad = R.pad;
-    const aboard = Object.values(players).filter(p => standing(p) && near(p, pad.x, pad.z, pad.r));
+    const aboard = Object.values(players).filter(p => standing(p) && nearY(p, pad, pad.r));
     if (!aboard.length) {
       esc.fund[esc.route] = Math.floor(esc.fund[esc.route] / 2);
       io.emit('banner', { text: `Nobody made it to the ${R.name.toLowerCase()}... half the fund was lost.`, cls: '', ms: 5000 });
@@ -627,8 +714,8 @@ function sendInit(socket) {
     id: socket.id, players: all, enemies, wave, medkits, map: MAP, weapons: WEAPONS, openDoors: [...openDoors], dbKind: db.kind,
     powerDrops, fires: Object.values(fires).map(f => ({ ...f, ms: f.until - now() })), escape: escState(),
     bossNames: Object.fromEntries(Object.entries(BOSS_KINDS).map(([k, v]) => [k, v.name])),
-    quest: questState(), destroyed: [...destroyed], claymores: Object.values(claymores), turrets: Object.values(turrets).map(t => ({ ...t, ms: t.until - now() })),
-    radio: radioState(), tombs: Object.values(tombs).map(t => ({ id: t.id, owner: t.owner, name: t.name, x: t.x, z: t.z })),
+    quest: questState(), destroyed: [...destroyed], maps: MAP_LIST(), claymores: Object.values(claymores), turrets: Object.values(turrets).map(t => ({ ...t, ms: t.until - now() })),
+    radio: radioState(), tombs: Object.values(tombs).map(t => ({ id: t.id, owner: t.owner, name: t.name, x: t.x, z: t.z, y: t.y })),
     difficulty, difficulties: Object.fromEntries(Object.entries(DIFF).map(([k, v]) => [k, v.name])), quickLines: QUICK_LINES,
   });
   socket.emit('loadout', { weapons: p.weapons, cur: p.cur, reset: true });
@@ -699,17 +786,18 @@ io.on('connection', socket => {
     p.x = clamp(d.x, B.x1, B.x2); p.y = clamp(d.y, 0, 50); p.z = clamp(d.z, B.z1, B.z2);
     p.yaw = Number(d.yaw) || 0; p.pitch = Number(d.pitch) || 0;
     p.crouch = !!d.c;
+    p.layer = layerOf(p.x, p.z, feetOf(p));
     if (p.downed) return;
     for (const m of Object.values(medkits)) {
-      if (near(p, m.x, m.z, 1.4) && feetOf(p) < 2.5 && p.health < p.maxHealth) {
+      if (nearY(p, m, 1.4) && p.health < p.maxHealth) {
         delete medkits[m.id];
         p.health = Math.min(p.maxHealth, p.health + 50);
         io.emit('medkitTaken', { id: m.id, by: p.id });
       }
     }
-    for (const u of Object.values(powerDrops)) if (near(p, u.x, u.z, 1.6) && feetOf(p) < 2.5) takePower(u, p);
+    for (const u of Object.values(powerDrops)) if (nearY(p, u, 1.6)) takePower(u, p);
     for (const tb of Object.values(tombs)) {
-      if (tb.owner !== p.id || !near(p, tb.x, tb.z, 1.8)) continue;
+      if (tb.owner !== p.id || !nearY(p, tb, 1.8)) continue;
       delete tombs[tb.id];
       for (const k of tb.perks) p.perks[k] = true;
       if (p.perks.jug) { p.maxHealth = 200; p.health = Math.max(p.health, 100); }
@@ -720,7 +808,7 @@ io.on('connection', socket => {
       notice(p.id, 'Tombstone recovered — your weapons and perks are back!', 'perk');
     }
     for (const q of MAP.questItems) {
-      if (!quest.items[q.id] && near(p, q.x, q.z, 1.6) && feetOf(p) < 2.5) {
+      if (!quest.items[q.id] && nearY(p, q, 1.6)) {
         quest.items[q.id] = true;
         const got = MAP.questItems.filter(i => i.route === q.route && quest.items[i.id]).length;
         const all = MAP.questItems.filter(i => i.route === q.route).length;
@@ -733,7 +821,7 @@ io.on('connection', socket => {
 
   socket.on('radio', d => {
     if (!d || !p.alive || !TRACKS.length || now() - (p.lastRadio || 0) < 600) return;
-    if (!MAP.radios.some(r => near(p, r.x, r.z, 3.5))) return;
+    if (!MAP.radios.some(r => nearY(p, r, 3.5))) return;
     p.lastRadio = now();
     if (d.action === 'next') setTrack(radio.idx + 1, p.name);
     else if (d.action === 'prev') setTrack(radio.idx - 1, p.name);
@@ -816,14 +904,14 @@ io.on('connection', socket => {
     if (d.type === 'claymore' && p.claymores > 0) {
       p.claymores--;
       const id = 'c' + (++projSeq);
-      claymores[id] = { id, x: d.x, z: d.z, yaw, owner: p.id };
+      claymores[id] = { id, x: d.x, z: d.z, y: feetOf(p), layer: p.layer || 0, yaw, owner: p.id };
       const mine = Object.values(claymores).filter(c => c.owner === p.id);
       if (mine.length > 6) { delete claymores[mine[0].id]; io.emit('placedGone', { id: mine[0].id }); }
       io.emit('placed', { kind: 'claymore', ...claymores[id] });
     } else if (d.type === 'turret' && p.turrets > 0) {
       p.turrets--;
       const id = 't' + (++projSeq);
-      turrets[id] = { id, x: d.x, z: d.z, yaw, owner: p.id, until: now() + 60000, cd: 0 };
+      turrets[id] = { id, x: d.x, z: d.z, y: feetOf(p), layer: p.layer || 0, yaw, owner: p.id, until: now() + 60000, cd: 0 };
       io.emit('placed', { kind: 'turret', ...turrets[id], ms: 60000 });
     }
   });
@@ -845,7 +933,8 @@ io.on('connection', socket => {
 
   socket.on('crystal', d => {
     const c = MAP.crystals.find(x => x.id === (d && d.id));
-    if (!c || quest.crystals[c.id] || !p.alive || !near(p, c.x, c.z, 80) || !zoneOpen('snow')) return;
+    const cz = c && zoneAt(c.x, c.z, layerOf(c.x, c.z, c.y - 0.7));
+    if (!c || quest.crystals[c.id] || !p.alive || !near(p, c.x, c.z, 80) || (cz && !zoneOpen(cz.id))) return;
     quest.crystals[c.id] = true;
     const got = Object.keys(quest.crystals).length;
     io.emit('crystalBroken', { id: c.id, by: p.id });
@@ -873,6 +962,14 @@ io.on('connection', socket => {
     io.emit('chat', { id: p.id, name: p.name, color: p.color, text, quick: Number.isInteger(d.quick) });
   });
 
+  socket.on('setMap', id => {
+    if (typeof id !== 'string' || id === MAP.id || !MAP_LIST().some(m => m.id === id)) return;
+    if (wave > 1 || esc.phase !== 'idle' || resetting) return notice(p.id, 'The map can only be changed before wave 2', 'deny');
+    loadMap(id);
+    io.emit('banner', { text: `${p.name} switched the map to ${MAP.name}`, cls: 'gold', ms: 3000 });
+    resetRun(); // re-sends init with the new map; clients reload their world
+  });
+
   socket.on('setDifficulty', d => {
     if (!DIFF[d] || d === difficulty) return;
     if (wave > 1 || esc.phase !== 'idle') return notice(p.id, 'Difficulty can only be changed before wave 2', 'deny');
@@ -890,7 +987,7 @@ io.on('connection', socket => {
     const needPower = () => { if (!quest.power) { notice(p.id, 'No power — switch on the generator in the Frozen Outpost', 'deny'); return true; } return false; };
     if (d.what === 'box') {
       const b = MAP.boxes.find(x => x.id === d.id);
-      if (!b || !near(p, b.x, b.z, 3)) return;
+      if (!b || !nearY(p, b, 3)) return;
       if (now() < (boxBusy[b.id] || 0)) return notice(p.id, 'The box is busy', 'deny');
       if (!pay(b.cost)) return;
       const owned = p.weapons.map(w => WEAPONS[w].base || w);
@@ -906,7 +1003,7 @@ io.on('connection', socket => {
       }, BOX_ROLL_MS);
     } else if (d.what === 'perk') {
       const perk = MAP.perks.find(k => k.id === d.id);
-      if (!perk || !near(p, perk.x, perk.z, 3)) return;
+      if (!perk || !nearY(p, perk, 3)) return;
       if (needPower()) return;
       if (p.perks[perk.id]) return notice(p.id, `You already have ${perk.name}`, 'deny');
       const cost = perk.id === 'revive' && Object.keys(players).length === 1 ? 500 : perk.cost;
@@ -917,14 +1014,14 @@ io.on('connection', socket => {
       notice(p.id, `${perk.name}: ${perk.desc}`, 'perk');
     } else if (d.what === 'door') {
       const door = MAP.doors.find(x => x.id === d.id);
-      if (!door || openDoors.has(door.id) || !near(p, door.x, door.z, 4.5)) return;
+      if (!door || openDoors.has(door.id) || !nearY(p, door, 4.5)) return;
       if (!pay(door.cost)) return;
       openDoors.add(door.id);
       rebuildObstacles();
       io.emit('doorOpened', { id: door.id, by: p.id, name: p.name });
     } else if (d.what === 'wall') {
       const w = MAP.wallbuys.find(x => x.id === d.id);
-      if (!w || !near(p, w.x, w.z, 3)) return;
+      if (!w || !nearY(p, w, 3)) return;
       if (w.kind === 'armor') {
         if (p.armor >= 150) return notice(p.id, 'Your armor is already full', 'deny');
         if (!pay(w.cost)) return;
@@ -950,7 +1047,7 @@ io.on('connection', socket => {
       }
     } else if (d.what === 'ammo') {
       const a = MAP.ammoCrates.find(x => x.id === d.id);
-      if (!a || !near(p, a.x, a.z, 3)) return;
+      if (!a || !nearY(p, a, 3)) return;
       const W = WEAPONS[p.weapons[p.cur]];
       if (!W.ammoCost) return notice(p.id, `The ${W.name} doesn't use ammo`, 'deny');
       if (!pay(W.ammoCost)) return;
@@ -958,13 +1055,13 @@ io.on('connection', socket => {
       notice(p.id, `${W.name} ammo refilled`, 'weapon');
     } else if (d.what === 'power') {
       const g = MAP.generator;
-      if (!near(p, g.x, g.z, 4.2) || quest.power) return;
+      if (!nearY(p, g, 4.2) || quest.power) return;
       quest.power = true;
       io.emit('power', { by: p.name });
       emitQuest();
     } else if (d.what === 'pap') {
       const m = MAP.pap;
-      if (!near(p, m.x, m.z, 4.2)) return;
+      if (!nearY(p, m, 4.2)) return;
       if (needPower()) return;
       const k = p.weapons[p.cur];
       if (WEAPONS[k].pap) return notice(p.id, 'This weapon is already upgraded', 'deny');
@@ -981,7 +1078,7 @@ io.on('connection', socket => {
       }, 3000);
     } else if (d.what === 'cryo') {
       const m = MAP.pedestal;
-      if (!near(p, m.x, m.z, 3.6)) return;
+      if (!nearY(p, m, 3.6)) return;
       if (!quest.cryo) return notice(p.id, 'The pedestal is frozen shut… shatter the 3 glowing crystals hidden in the Frozen Outpost', 'deny');
       const who = p.token || p.id;
       if (quest.cryoTaken.includes(who)) return notice(p.id, 'You already took a Cryo Cannon', 'deny');
@@ -990,7 +1087,7 @@ io.on('connection', socket => {
       notice(p.id, 'You took the Cryo Cannon — freeze them, then shatter them!', 'weapon');
     } else if (d.what === 'escape') {
       const R = MAP.escapes[d.route];
-      if (!R || !near(p, R.terminal.x, R.terminal.z, 3.5)) return;
+      if (!R || !nearY(p, R.terminal, 3.5)) return;
       if (esc.route && esc.route !== d.route && esc.phase !== 'idle' && esc.phase !== 'funding') return notice(p.id, 'Another escape is already under way', 'deny');
       if (esc.phase !== 'idle' && esc.phase !== 'funding') return;
       if (wave < R.minWave) return notice(p.id, `Not yet… survive until wave ${R.minWave}`, 'deny');
@@ -1012,7 +1109,7 @@ io.on('connection', socket => {
   });
 
   socket.on('bank', d => {
-    if (!standing(p) || !d || !near(p, MAP.bank.x, MAP.bank.z, 3)) return;
+    if (!standing(p) || !d || !nearY(p, MAP.bank, 3)) return;
     if (d.action === 'deposit') {
       const amt = Math.min(500, p.credits);
       if (amt <= 0) return notice(p.id, 'No credits to deposit', 'deny');
@@ -1115,8 +1212,8 @@ function killPlayer(target) {
     for (const k in tombs) if (tombs[k].owner === target.id) { delete tombs[k]; io.emit('tombGone', { id: k }); }
     const id = 'tb' + (++projSeq);
     const perks = Object.keys(target.perks).filter(k => k !== 'tombstone');
-    tombs[id] = { id, owner: target.id, name: target.name, x: target.x, z: target.z, weapons: target.weapons.slice(), perks, until: now() + 120000 };
-    io.emit('tombSpawn', { id, owner: target.id, name: target.name, x: target.x, z: target.z });
+    tombs[id] = { id, owner: target.id, name: target.name, x: target.x, z: target.z, y: feetOf(target), weapons: target.weapons.slice(), perks, until: now() + 120000 };
+    io.emit('tombSpawn', { id, owner: target.id, name: target.name, x: target.x, z: target.z, y: tombs[id].y });
   }
   target.perks = {};
   target.maxHealth = 100;
@@ -1153,9 +1250,24 @@ function reviveTick(dt) {
 const TICK = 50;
 
 function tryMove(e, nx, nz) {
-  if (insideObstacle(nx, nz, e.r) || !zoneAt(nx, nz)) return false;
-  e.x = nx; e.z = nz;
-  return true;
+  const L = e.layer || 0, cands = [L];
+  const r = rampAt(e.x, e.z);
+  if (r) { if (r.from !== L) cands.push(r.from); if (r.to !== L) cands.push(r.to); }
+  for (const L2 of cands) {
+    if (!walkable(L2, nx, nz)) continue;
+    const hy = heightAt(L2, nx, nz);
+    if (Math.abs(hy - (e.y || 0)) > 0.8) continue; // no jumping between a floor and an escalator
+    if (obstacleAt(nx, nz, e.r, hy + 0.35, hy + 1.8)) continue;
+    e.x = nx; e.z = nz; e.y = hy; e.layer = L2;
+    return true;
+  }
+  return false;
+}
+// follow the flow field one step, switching floors on escalators
+function followFlow(e, fx, fz, step) {
+  const wp = flowStep(e.x, e.z, e.layer || 0);
+  if (wp && wp.layer !== e.layer) e.layer = wp.layer;
+  moveToward(e, wp ? wp.x : fx, wp ? wp.z : fz, step);
 }
 function moveToward(e, tx, tz, step) {
   if (step <= 0) return;
@@ -1172,12 +1284,12 @@ function moveToward(e, tx, tz, step) {
 
 function bossThrow(e, target) {
   const flightMs = 1100;
-  const to = { x: target.x + rnd(-1, 1), z: target.z + rnd(-1, 1) };
-  io.emit('bossThrow', { id: e.id, from: [e.x, 3.6, e.z], to: [to.x, 0, to.z], ms: flightMs });
+  const to = { x: target.x + rnd(-1, 1), z: target.z + rnd(-1, 1), y: feetOf(target) };
+  io.emit('bossThrow', { id: e.id, from: [e.x, e.y + 3.6, e.z], to: [to.x, to.y, to.z], ms: flightMs });
   setTimeout(() => {
-    io.emit('rockImpact', { at: [to.x, 0, to.z] });
+    io.emit('rockImpact', { at: [to.x, to.y, to.z] });
     for (const p of Object.values(players)) {
-      if (standing(p) && near(p, to.x, to.z, 2.6) && feetOf(p) < 2.6) damagePlayer(p, 30, { boss: true, x: to.x, z: to.z });
+      if (standing(p) && nearY(p, to, 2.6)) damagePlayer(p, 30, { boss: true, x: to.x, z: to.z });
     }
   }, flightMs);
 }
@@ -1204,7 +1316,7 @@ function juggernautCharge(e, dt) {
   const step = 18 * dt;
   const nx = e.x + Math.sin(c.a) * step, nz = e.z + Math.cos(c.a) * step;
   let o;
-  while ((o = obstacleAt(nx, nz, e.r))) {
+  while ((o = obstacleAt(nx, nz, e.r, e.y + 0.35, e.y + 1.8))) {
     const idx = MAP.obstacles.indexOf(o);
     if (idx >= 0 && DESTRUCTIBLE.has(idx) && !destroyed.has(idx)) {
       destroyed.add(idx);
@@ -1216,10 +1328,10 @@ function juggernautCharge(e, dt) {
       return;
     }
   }
-  if (!zoneAt(nx, nz)) { c.ph = 'stun'; c.t = 1.2; return; }
+  if (!walkable(e.layer || 0, nx, nz) || rampAt(nx, nz)) { c.ph = 'stun'; c.t = 1.2; return; }
   e.x = nx; e.z = nz; c.dist += step;
   for (const p of Object.values(players)) {
-    if (!standing(p) || c.hit.has(p.id) || feetOf(p) > 2 || !near(p, e.x, e.z, e.r + 1.3)) continue;
+    if (!standing(p) || c.hit.has(p.id) || feetOf(p) - e.y > 2 || feetOf(p) < e.y - 1 || !near(p, e.x, e.z, e.r + 1.3)) continue;
     c.hit.add(p.id);
     damagePlayer(p, 45, { boss: true, x: e.x, z: e.z });
     io.to(p.id).emit('knock', { x: Math.sin(c.a) * 14, z: Math.cos(c.a) * 14 });
@@ -1229,16 +1341,16 @@ function juggernautCharge(e, dt) {
 
 function bossAbilities(e, target, dist, dt) {
   if (e.bk === 'king') {
-    if (e.throwCd === 0 && dist > 6 && dist < 30 && los(e.x, e.z, target.x, target.z, 1.6)) { e.throwCd = 4.5; bossThrow(e, target); }
+    if (e.throwCd === 0 && dist > 6 && dist < 30 && seeEach(e, target, 1.6)) { e.throwCd = 4.5; bossThrow(e, target); }
   } else if (e.bk === 'juggernaut') {
-    if (!e.ch && e.chargeCd === 0 && dist > 6 && dist < 30 && los(e.x, e.z, target.x, target.z, 1.6)) {
+    if (!e.ch && e.chargeCd === 0 && dist > 6 && dist < 30 && seeEach(e, target, 1.6) && !rampAt(e.x, e.z)) {
       e.ch = { ph: 'windup', t: 1.1, a: Math.atan2(target.x - e.x, target.z - e.z), dist: 0, hit: new Set() };
       io.emit('jugWindup', { id: e.id, a: e.ch.a });
     }
   } else if (e.bk === 'warden') {
     const b = e.beam;
     const aimAt = Math.atan2(target.x - e.x, target.z - e.z);
-    if (!b && e.laserCd === 0 && dist < 40 && los(e.x, e.z, target.x, target.z, 1.6)) {
+    if (!b && e.laserCd === 0 && dist < 40 && seeEach(e, target, 1.6)) {
       e.beam = { ph: 'charge', a: aimAt + (Math.random() < 0.5 ? -0.5 : 0.5), t: 1.3, len: 0, tickT: 0 };
       io.emit('laserCharge', { id: e.id });
     } else if (b) {
@@ -1250,14 +1362,14 @@ function bossAbilities(e, target, dist, dt) {
         if (b.t <= 0) { e.beam = null; e.laserCd = 7; return; }
       }
       const ex = e.x + Math.sin(b.a) * 45, ez = e.z + Math.cos(b.a) * 45;
-      b.len = 45 * losT(e.x, e.z, ex, ez, 1.4);
+      b.len = 45 * losT(e.x, e.z, ex, ez, 1.4, e.y);
       if (b.ph === 'fire') {
         b.tickT -= dt;
         if (b.tickT <= 0) {
           b.tickT = 0.2;
           const bx = e.x + Math.sin(b.a) * b.len, bz = e.z + Math.cos(b.a) * b.len;
           for (const p of Object.values(players)) {
-            if (standing(p) && feetOf(p) < 1.0 && segDist(p.x, p.z, e.x, e.z, bx, bz) < 0.9) damagePlayer(p, p.crouch ? 4 : 9, { boss: true, x: e.x, z: e.z });
+            if (standing(p) && feetOf(p) - e.y < 1.0 && feetOf(p) > e.y - 0.5 && segDist(p.x, p.z, e.x, e.z, bx, bz) < 0.9) damagePlayer(p, p.crouch ? 4 : 9, { boss: true, x: e.x, z: e.z });
           }
         }
       }
@@ -1265,15 +1377,15 @@ function bossAbilities(e, target, dist, dt) {
   } else if (e.bk === 'summoner') {
     if (e.slamCd === 0 && dist < 14) {
       e.slamCd = 7;
-      shockwaves.push({ x: e.x, z: e.z, r: 0, hit: new Set() });
-      io.emit('shockwave', { id: e.id, x: e.x, z: e.z, speed: 13, max: 18 });
+      shockwaves.push({ x: e.x, z: e.z, y: e.y, r: 0, hit: new Set() });
+      io.emit('shockwave', { id: e.id, x: e.x, y: e.y, z: e.z, speed: 13, max: 18 });
     }
     if (e.summonCd === 0) {
       e.summonCd = 10;
       const minions = Object.values(enemies).filter(x => x.type !== 'boss').length;
       if (minions < 40) for (let i = 0; i < 3; i++) {
         const a = Math.random() * Math.PI * 2, at = { x: e.x + Math.cos(a) * 2.5, z: e.z + Math.sin(a) * 2.5 };
-        if (!insideObstacle(at.x, at.z, 0.5)) addEnemy('runner', at);
+        if (walkable(e.layer, at.x, at.z) && !insideObstacle(at.x, at.z, 0.5, e.y)) addEnemy('runner', { ...at, layer: e.layer, y: e.y });
       }
       io.emit('summon', { id: e.id });
     }
@@ -1286,7 +1398,7 @@ function gunnerShoot(e, target, dist) {
   const hit = Math.random() < (dist < 6 ? 0.25 : 0.1);
   const miss = () => (Math.random() < 0.5 ? -1 : 1) * rnd(0.8, 2.6);
   const to = hit ? [target.x, feetOf(target) + 1.2, target.z] : [target.x + miss(), feetOf(target) + rnd(0.3, 2.6), target.z + miss()];
-  io.emit('zshot', { id: e.id, from: [e.x, 1.35, e.z], to, hit });
+  io.emit('zshot', { id: e.id, from: [e.x, e.y + 1.35, e.z], to, hit });
   if (hit) damagePlayer(target, 7, { x: e.x, z: e.z });
 }
 
@@ -1310,7 +1422,7 @@ function simulate() {
     for (const p of alive) {
       if (!p.crouch) { p.hidden = false; continue; }
       if (inBush(p.x, p.z)) { p.hidden = true; continue; }
-      p.hidden = !elist.some(e => los(e.x, e.z, p.x, p.z, 1.0));
+      p.hidden = !elist.some(e => seeEach(e, p, 1.0));
     }
   }
   for (const p of Object.values(players)) if (!standing(p)) p.hidden = false;
@@ -1319,9 +1431,9 @@ function simulate() {
   reviveTick(dt);
 
   for (const cf of MAP.campfires) {
-    const zn = zoneAt(cf.x, cf.z);
+    const zn = zoneAt(cf.x, cf.z, layerOf(cf.x, cf.z, cf.y || 0));
     if (!zn || !zoneOpen(zn.id)) continue;
-    for (const p of alive) if (near(p, cf.x, cf.z, 4.5) && p.health < p.maxHealth) p.health = Math.min(p.maxHealth, p.health + 6 * dt);
+    for (const p of alive) if (nearY(p, cf, 4.5) && p.health < p.maxHealth) p.health = Math.min(p.maxHealth, p.health + 6 * dt);
   }
 
   for (const pr of Object.values(projs)) {
@@ -1330,16 +1442,17 @@ function simulate() {
   }
   for (const f of Object.values(fires)) {
     if (t > f.until) { delete fires[f.id]; continue; }
-    for (const e of Object.values(enemies)) if (Math.hypot(e.x - f.x, e.z - f.z) < f.r + e.r) hurtEnemy(e, (e.type === 'boss' ? 25 : 70) * dt, players[f.owner], 'fire');
+    for (const e of Object.values(enemies)) if (Math.hypot(e.x - f.x, e.z - f.z) < f.r + e.r && Math.abs(e.y - (f.y || 0)) < 2) hurtEnemy(e, (e.type === 'boss' ? 25 : 70) * dt, players[f.owner], 'fire');
   }
   // claymores trigger on zombies in front of them
   for (const c of Object.values(claymores)) {
     const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw);
     const trip = Object.values(enemies).some(e => {
+      if (Math.abs(e.y - (c.y || 0)) > 2) return false;
       const dx = e.x - c.x, dz = e.z - c.z, d = Math.hypot(dx, dz);
       return d < 2.8 && d > 0.01 && (dx * fx + dz * fz) / d > 0.15;
     });
-    if (trip) { delete claymores[c.id]; io.emit('placedGone', { id: c.id }); explode(c.x + fx, 0.4, c.z + fz, 4.5, 380, c.owner, 'claymore'); }
+    if (trip) { delete claymores[c.id]; io.emit('placedGone', { id: c.id }); explode(c.x + fx, (c.y || 0) + 0.4, c.z + fz, 4.5, 380, c.owner, 'claymore'); }
   }
   // sentry turrets
   for (const tu of Object.values(turrets)) {
@@ -1347,10 +1460,10 @@ function simulate() {
     tu.cd -= dt;
     if (tu.cd > 0) continue;
     let best = null, bd = 25 * 25;
-    for (const e of Object.values(enemies)) { const dd = dist2(e, tu); if (dd < bd && los(tu.x, tu.z, e.x, e.z, 1.2)) { bd = dd; best = e; } }
+    for (const e of Object.values(enemies)) { const dd = dist2(e, tu); if (dd < bd && seeEach(tu, e, 1.2)) { bd = dd; best = e; } }
     if (!best) continue;
     tu.cd = 0.18;
-    io.emit('tshot', { id: tu.id, to: [best.x, best.type === 'boss' ? 2.5 : 1.2, best.z] });
+    io.emit('tshot', { id: tu.id, to: [best.x, best.y + (best.type === 'boss' ? 2.5 : 1.2), best.z] });
     hurtEnemy(best, best.type === 'boss' ? 12 : 22, players[tu.owner], 'turret');
   }
   for (let i = shockwaves.length - 1; i >= 0; i--) {
@@ -1360,7 +1473,7 @@ function simulate() {
     for (const p of alive) {
       if (s.hit.has(p.id)) continue;
       const d = Math.hypot(p.x - s.x, p.z - s.z);
-      if (Math.abs(d - s.r) < 0.9 && feetOf(p) < 0.35) { s.hit.add(p.id); damagePlayer(p, 30, { boss: true, x: s.x, z: s.z }); }
+      if (Math.abs(d - s.r) < 0.9 && feetOf(p) - (s.y || 0) < 0.35 && feetOf(p) > (s.y || 0) - 1) { s.hit.add(p.id); damagePlayer(p, 30, { boss: true, x: s.x, z: s.z }); }
     }
   }
   for (const u of Object.values(powerDrops)) if (t > u.until) { delete powerDrops[u.id]; io.emit('puGone', { id: u.id }); }
@@ -1383,8 +1496,8 @@ function simulate() {
     for (const m of monkeys) { const dd = dist2(m, e); if (dd < md) { md = dd; monkey = m; } }
     if (monkey) {
       if (Math.sqrt(md) > e.r + 1) {
-        if (los(e.x, e.z, monkey.x, monkey.z, 0.3)) moveToward(e, monkey.x, monkey.z, step);
-        else { const wp = flowStep(e.x, e.z); moveToward(e, wp ? wp.x : monkey.x, wp ? wp.z : monkey.z, step); }
+        if (seeEach(e, monkey, 0.3)) moveToward(e, monkey.x, monkey.z, step);
+        else followFlow(e, monkey.x, monkey.z, step);
       }
       continue;
     }
@@ -1397,19 +1510,19 @@ function simulate() {
     }
     if (target) {
       const dist = Math.sqrt(best);
-      const reach = e.r + 1.2 + (feetOf(target) > 0.4 ? 1.5 : 0);
-      const seen = dist < 35 && los(e.x, e.z, target.x, target.z, 0.3);
+      const rel = feetOf(target) - e.y;
+      const reach = e.r + 1.2 + (rel > 0.4 ? 1.5 : 0);
+      const seen = dist < 35 && seeEach(e, target, 0.3);
       const holdRange = e.type === 'gunner' && seen && dist < 9;
       if (dist > e.r + 0.9 && !holdRange) {
         if (dist < 14 && seen) moveToward(e, target.x, target.z, step);
         else {
-          const wp = flowStep(e.x, e.z);
-          moveToward(e, wp ? wp.x : target.x, wp ? wp.z : target.z, step);
+          followFlow(e, target.x, target.z, step);
         }
       }
       if (e.type === 'exploder') {
-        if (dist < 1.9) { killEnemy(e, null, 'self'); continue; }
-      } else if (dist < reach && e.attackCd === 0 && feetOf(target) < 2.5) {
+        if (dist < 1.9 && Math.abs(rel) < 2) { killEnemy(e, null, 'self'); continue; }
+      } else if (dist < reach && e.attackCd === 0 && rel < 2.5 && rel > -1.5) {
         e.attackCd = e.cd;
         io.emit('enemyAttack', { id: e.id });
         damagePlayer(target, e.dmg, { x: e.x, z: e.z });
@@ -1419,11 +1532,10 @@ function simulate() {
     } else {
       if (e.beam) e.beam = null;
       if (!e.wander || Math.random() < 0.01 || dist2(e, e.wander) < 2) e.wander = randomOpenPoint(1);
-      const wp = flowStep(e.x, e.z);
-      moveToward(e, wp ? wp.x : e.wander.x, wp ? wp.z : e.wander.z, step * 0.45);
+      followFlow(e, e.wander.x, e.wander.z, step * 0.45);
     }
     for (const o of elist) {
-      if (o === e || !enemies[o.id]) continue;
+      if (o === e || !enemies[o.id] || o.layer !== e.layer) continue;
       const dx = e.x - o.x, dz = e.z - o.z, d2 = dx * dx + dz * dz, min = e.r + o.r + 0.2;
       if (d2 > 0 && d2 < min * min) {
         const d = Math.sqrt(d2);
@@ -1447,6 +1559,7 @@ function simulate() {
   const es = {};
   for (const e of Object.values(enemies)) {
     const s = es[e.id] = { x: r2(e.x), z: r2(e.z), hp: Math.ceil(e.hp), maxHp: e.maxHp, type: e.type, bk: e.bk };
+    if (e.y) s.y = r2(e.y);
     if (e.beam) s.beam = { ph: e.beam.ph, a: +e.beam.a.toFixed(3), len: +e.beam.len.toFixed(1) };
     if (e.ch) { s.ch = e.ch.ph; s.a = +e.ch.a.toFixed(3); }
     if (e.frost > 0.05) s.fz = e.frozenUntil > t ? 2 : r2(e.frost);
@@ -1460,6 +1573,7 @@ function simulate() {
   io.volatile.emit('state', msg); // volatile: a late packet is dropped instead of queued behind newer ones
 }
 
+loadMap(process.env.MAP_ID || 'arena');
 rebuildObstacles();
 
 async function shutdown() {
