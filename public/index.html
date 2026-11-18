@@ -77,21 +77,94 @@
     <input id="name-input" maxlength="16" placeholder="Your name" />
     <button id="play-btn">CLICK TO PLAY</button>
     <div id="loading"><div class="spinner"></div></div>
-    <div class="controls">
-      <b>WASD</b> move · <b>Shift</b> sprint · <b>Space</b> jump / vault / climb · <b>C</b> crouch &amp; hide · <b>Left-click</b> shoot · <b>Right-click</b> aim · <b>R</b> reload<br />
-      <b>1 / 2 / 3 / Wheel</b> weapons · <b>V</b> knife · <b>G</b> grenade · <b>H</b> molotov · <b>Q</b> monkey bomb · <b>X</b> claymore · <b>Z</b> sentry turret<br />
-      <b>E</b> use / buy / hold to revive · <b>F</b> withdraw at bank · <b>T</b> give 100¢ · <b>Middle-click</b> ping · <b>Enter</b> chat · <b>B</b> quick chat · <b>J</b> objectives · <b>M</b> big map · <b>Esc</b> pause
-    </div>
     <div class="cols">
-      <div class="guide">
-        Earn credits: <b>+10</b> hit · <b>+60</b> kill · <b>+100</b> headshot · <b>+130</b> knife · <b>+1000</b> boss.<br />
-        Spend them on the <b style="color:#40c4ff">Mystery Box</b>, <b>perks</b>, <b>wall-buys</b> (armor, grenades, molotovs, monkey bombs, guns), <b style="color:#b388ff">ammo crates</b> and <b style="color:#ffd54f">gates</b> to 5 more areas.<br />
-        Zombies drop <b style="color:#ffd54f">power-ups</b>: 2X points, Max Ammo, Insta-Kill, Nuke. A <b style="color:#e040fb">boss</b> arrives every 5 waves — dodge rocks, jump the shockwave, get behind cover from the laser.<br />
-        Turn on the <b style="color:#ffeb3b">generator</b> (Frozen Outpost) to power perks and <b style="color:#e040fb">Pack-a-Punch</b> (Ruins). Shatter 3 glowing crystals for a wonder weapon.<br />
-        Downed? Teammates hold <b>E</b> to revive you within 30 s. Watch for armored, exploding, crawling and gun-toting zombies — and hellhound rounds.<br />
-        <b style="color:#76ff03">Three ways out</b> (wave 12+): find the radio parts for the <b>helicopter</b>, the fuel for the <b>boat</b>, or blast open the <b>crypt tunnel</b> — then pay, hold the area and get on board.<br />
-        Find the <b style="color:#f06292">radios</b> in every area to change the music for everyone.<br />
-        Dying costs 25% of your wallet, your perks and armor — the <b style="color:#ffd54f">Bank</b> keeps credits safe.
+      <div class="infobox">
+        <div class="tabs">
+          <button class="tab on" data-tab="howto">How to play</button>
+          <button class="tab" data-tab="keys">Controls</button>
+          <button class="tab" data-tab="maps">Maps</button>
+          <button class="tab" data-tab="log">Changelog <span class="new">v7</span></button>
+        </div>
+
+        <div class="pane on" id="tab-howto">
+          <div class="cards">
+            <div class="card" style="--c:#69f0ae"><i>💰</i><h4>Earn credits</h4><p><b>+10</b> hit · <b>+60</b> kill · <b>+100</b> headshot<br><b>+130</b> knife · <b>+1000</b> boss</p></div>
+            <div class="card" style="--c:#40c4ff"><i>🛒</i><h4>Spend them</h4><p><b class="c-blue">Mystery Box</b>, perks, wall-buys, <b class="c-violet">ammo crates</b> and <b class="c-gold">gates</b> to new areas</p></div>
+            <div class="card" style="--c:#ffeb3b"><i>⚡</i><h4>Turn on the power</h4><p>The <b class="c-yellow">generator</b> powers perks and <b class="c-pink">Pack-a-Punch</b>. Shatter 3 crystals for a wonder weapon</p></div>
+            <div class="card" style="--c:#ffd54f"><i>🎁</i><h4>Power-ups</h4><p>Zombies drop <b>2X Points</b>, <b>Max Ammo</b>, <b>Insta-Kill</b> and <b>Nuke</b></p></div>
+            <div class="card" style="--c:#e040fb"><i>☠️</i><h4>Bosses &amp; specials</h4><p>A boss every 5 waves. Watch for armored, exploding, crawling and gun-toting zombies — and hellhounds</p></div>
+            <div class="card" style="--c:#4fc3f7"><i>🤝</i><h4>Stick together</h4><p>Downed? A teammate holds <b>E</b> within 30 s. Ping, chat and share credits with <b>T</b></p></div>
+            <div class="card" style="--c:#76ff03"><i>🚁</i><h4>Get out alive</h4><p>From wave 12: collect the parts, pay, hold the area and escape by helicopter, boat or tunnel</p></div>
+            <div class="card" style="--c:#f06292"><i>📻</i><h4>Radios</h4><p>Every area has one — <b>E</b> next song, <b>F</b> on/off, for the whole team</p></div>
+            <div class="card" style="--c:#ffab40"><i>🏦</i><h4>Dying hurts</h4><p>You lose 25% of your wallet, your perks and armor. The <b class="c-gold">Bank</b> keeps credits safe</p></div>
+          </div>
+        </div>
+
+        <div class="pane" id="tab-keys">
+          <div class="keys">
+            <div><h5>Move</h5>
+              <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</p>
+              <p><kbd>Shift</kbd> sprint</p>
+              <p><kbd>Space</kbd> jump / vault / climb</p>
+              <p><kbd>C</kbd> crouch &amp; hide</p></div>
+            <div><h5>Fight</h5>
+              <p><kbd>LMB</kbd> shoot · <kbd>RMB</kbd> aim</p>
+              <p><kbd>R</kbd> reload · <kbd>V</kbd> knife</p>
+              <p><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> / <kbd>Wheel</kbd> weapons</p></div>
+            <div><h5>Equipment</h5>
+              <p><kbd>G</kbd> grenade · <kbd>H</kbd> molotov</p>
+              <p><kbd>Q</kbd> monkey bomb</p>
+              <p><kbd>X</kbd> claymore · <kbd>Z</kbd> turret</p></div>
+            <div><h5>Interact</h5>
+              <p><kbd>E</kbd> use / buy / hold to revive</p>
+              <p><kbd>F</kbd> withdraw at bank</p>
+              <p><kbd>T</kbd> give 100¢ to a teammate</p></div>
+            <div><h5>Team &amp; UI</h5>
+              <p><kbd>MMB</kbd> ping · <kbd>Enter</kbd> chat</p>
+              <p><kbd>B</kbd> quick chat · <kbd>J</kbd> objectives</p>
+              <p><kbd>M</kbd> big map · <kbd>Esc</kbd> pause</p></div>
+          </div>
+        </div>
+
+        <div class="pane" id="tab-maps">
+          <div class="maps">
+            <div class="mapc" style="--a:#1b2a3a;--b:#3a2a4a" data-map="arena"><h4>Outbreak Arena</h4><small>Night · 6 areas</small><p>Forest, village, ruins, military base and a frozen outpost. Three escapes: helicopter, boat or crypt tunnel.</p></div>
+            <div class="mapc" style="--a:#6d4c2a;--b:#c49a5a" data-map="dust"><h4>Sandstone</h4><small>Desert town · 9 areas</small><p>Market square, narrow alleys, a domed palace, canyon, quarry, oasis, bazaar and tombs.</p></div>
+            <div class="mapc" style="--a:#2b3036;--b:#6b5a4a" data-map="factory"><h4>Iron Works</h4><small>Snowy factory · 9 areas</small><p>Brick halls, rail depot, labs and furnaces. Teleporters come alive once the power is on.</p></div>
+            <div class="mapc" style="--a:#4a3a14;--b:#a8862e" data-map="mall"><h4>Golden Terraces</h4><small>Mall · 3 floors</small><p>Glass atrium with escalators, 40 shops, a metro tunnel and a rooftop helipad.</p></div>
+          </div>
+          <p class="hint">Change the map with the <b>Map</b> picker below, before wave 2. Everyone reloads onto the new map.</p>
+        </div>
+
+        <div class="pane" id="tab-log">
+          <div class="log">
+            <div class="ver latest"><div class="vh"><b>v7</b><span>Maps &amp; world</span><time>18 Nov 2026</time></div><ul>
+              <li>3 new maps: <b>Sandstone</b>, <b>Iron Works</b> and the 3-floor <b>Golden Terraces</b> mall</li>
+              <li>Map picker in the menu; Outbreak Arena is 1.4× bigger with twice the cover</li>
+              <li>Skies, grass/snow/gravel/sand terrain and textured walls</li>
+              <li>Escalators, multi-floor zombie pathing, teleporters; bigger player arrow on the map</li>
+              <li>New look for this menu</li></ul></div>
+            <div class="ver"><div class="vh"><b>v6</b><span>Perks &amp; radio</span><time>18 Nov 2026</time></div><ul>
+              <li>5 new perks: PhD Flopper, Widow's Wine, Vulture Aid, Death Perception, Tombstone</li>
+              <li>Radios with shared music; recorded weapon and boss sounds</li>
+              <li>Team panel with names, HP and perks; bigger minimap and <b>M</b> full map</li></ul></div>
+            <div class="ver"><div class="vh"><b>v5</b><span>The big one</span><time>18 Nov 2026</time></div><ul>
+              <li>Downed &amp; revive, Pack-a-Punch, power generator, quests</li>
+              <li>3 escape routes, Juggernaut boss, Cryo Cannon, claymores and turrets</li>
+              <li>Exploding, crawling, armored and gunner zombies; hellhound rounds</li>
+              <li>Pings, chat, difficulty settings, gore and damage numbers</li></ul></div>
+            <div class="ver"><div class="vh"><b>v4</b><span>Loadout &amp; escape</span><time>17 Nov 2026</time></div><ul>
+              <li>2 new areas, armor, grenades/molotovs/monkey bombs, new guns</li>
+              <li>Power-ups, more boss types, the escape end game, 3D models</li>
+              <li>Fixes for freezes and lag</li></ul></div>
+            <div class="ver"><div class="vh"><b>v3</b><span>Saves</span><time>17 Nov 2026</time></div><ul>
+              <li>Saves and leaderboard, vault/climb, crouch to hide, 3 unlockable areas, bosses</li></ul></div>
+            <div class="ver"><div class="vh"><b>v2</b><span>Economy</span><time>17 Nov 2026</time></div><ul>
+              <li>Sound, safe respawns, Mystery Box, medkits, perks, credits and bank</li></ul></div>
+            <div class="ver"><div class="vh"><b>v1</b><span>First playable</span><time>17 Nov 2026</time></div><ul>
+              <li>Co-op wave survival in the browser</li></ul></div>
+          </div>
+        </div>
       </div>
       <div class="savebox">
         <div class="label">YOUR SAVE</div>
@@ -113,6 +186,17 @@
     <div class="credits-line">Models: Blaster Kit by Kenney (CC0) · Survivors by Quaternius (CC0) · Zombie by bachosoftdesign · Goblin by Eric Oudin · Dragon by jeremy · Juggernaut mech (author uncredited)</div>
   </div>
 
+  <script>
+    document.querySelectorAll('#overlay .tab').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('#overlay .tab, #overlay .pane').forEach(e => e.classList.remove('on'));
+      b.classList.add('on'); document.getElementById('tab-' + b.dataset.tab).classList.add('on');
+    }));
+    document.querySelectorAll('#overlay .mapc').forEach(c => c.addEventListener('click', () => {
+      const sel = document.getElementById('map-select');
+      if (!sel || sel.disabled || sel.value === c.dataset.map) return;
+      sel.value = c.dataset.map; sel.dispatchEvent(new Event('change'));
+    }));
+  </script>
   <script src="/socket.io/socket.io.js"></script>
   <script type="module" src="game.js"></script>
 </body>

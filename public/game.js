@@ -887,6 +887,7 @@ function buildMapSelect() {
   if (!sel) return;
   sel.innerHTML = MAP_CHOICES.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('');
   sel.value = MAP.id;
+  document.querySelectorAll('.mapc').forEach(c => c.classList.toggle('cur', c.dataset.map === MAP.id));
   sel.onchange = () => { socket.emit('setMap', sel.value); sel.value = MAP.id; };
 }
 let teleCd = 0;
