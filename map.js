@@ -92,13 +92,23 @@ function buildMap() {
   const perks = [
     { id: 'jug',      name: 'Juggernaut',      cost: 2500, x: -35,  z: -35,  color: 0xe53935, desc: '200 max health' },
     { id: 'dtap',     name: 'Double Tap',      cost: 2000, x: 35,   z: 35,   color: 0xffb300, desc: '2x damage, faster fire' },
-    { id: 'sprint',   name: 'Quick Sprint',    cost: 1500, x: 35,   z: -35,  color: 0x43a047, desc: 'Faster, endless sprint' },
+    { id: 'sprint',   name: 'Stamin-Up',       cost: 1500, x: 35,   z: -35,  color: 0x43a047, desc: 'Faster, endless sprint' },
     { id: 'speed',    name: 'Speed Cola',      cost: 1500, x: -35,  z: 35,   color: 0x1e88e5, desc: '2x reload speed' },
     { id: 'mule',     name: 'Mule Kick',       cost: 3000, x: 104,  z: 0,    color: 0x2e7d32, desc: 'Carry a 3rd weapon' },
     { id: 'deadshot', name: 'Deadshot',        cost: 2000, x: -104, z: -104, color: 0x6d4c41, desc: '3x headshots, tighter aim' },
     { id: 'cherry',   name: 'Electric Cherry', cost: 2000, x: -104, z: 34,   color: 0x29b6f6, desc: 'Reloading shocks nearby enemies' },
     { id: 'revive',   name: 'Quick Revive',    cost: 1500, x: 7,    z: -81,  color: 0x00bcd4, desc: 'Revive 2x faster; self-revive when playing solo' },
+    { id: 'phd',       name: 'PhD Flopper',      cost: 2000, x: 106,  z: -45,  color: 0x8e24aa, desc: 'Immune to blasts; landing from a fall explodes' },
+    { id: 'widow',     name: "Widow's Wine",     cost: 2500, x: -34,  z: -104, color: 0x880e4f, desc: 'Getting hit webs nearby zombies; knife webs too' },
+    { id: 'vulture',   name: 'Vulture Aid',      cost: 2000, x: 60,   z: 34,   color: 0x9e9d24, desc: 'Kills can drop bonus points and ammo' },
+    { id: 'deathperc', name: 'Death Perception', cost: 1500, x: -52,  z: -104, color: 0xff6f00, desc: 'See zombies through walls; +15% damage' },
+    { id: 'tombstone', name: 'Tombstone Soda',   cost: 2000, x: -52,  z: 34,   color: 0x546e7a, desc: 'When you die, your guns and perks wait at your grave' },
   ];
+  // Jukebox radios, one per area
+  const radios = [
+    { id: 'r_main', x: 22, z: 36.5 }, { id: 'r_forest', x: -20, z: -62 }, { id: 'r_village', x: 86, z: -30 },
+    { id: 'r_ruins', x: -60, z: -50 }, { id: 'r_base', x: 60, z: -104 }, { id: 'r_snow', x: -62, z: -34 },
+  ].map(r => ({ ...r, w: 1.3, d: 0.65, h: 1.6 }));
   // Power, Pack-a-Punch, quests
   const generator = { x: -100, z: -30, w: 2.2, d: 1.2, h: 1.7 };
   const pap = { x: -95, z: -55, w: 1.8, d: 1.3, h: 2.3, cost: 5000 };
@@ -144,6 +154,7 @@ function buildMap() {
   obstacles.push([bank.x, bank.z, bank.w, bank.d, bank.h]);
   for (const p of perks) obstacles.push([p.x, p.z, perkSize.w, perkSize.d, perkSize.h]);
   for (const a of ammoCrates) obstacles.push([a.x, a.z, a.w, a.d, a.h]);
+  for (const r of radios) obstacles.push([r.x, r.z, r.w, r.d, r.h]);
   for (const s2 of [generator, pap, pedestal]) obstacles.push([s2.x, s2.z, s2.w, s2.d, s2.h]);
   for (const e of Object.values(escapes)) { const t = e.terminal; obstacles.push([t.x, t.z, t.w, t.d, t.h]); }
   const rubbleIdx = obstacles.length; obstacles.push([rubble.x, rubble.z, rubble.w, rubble.d, rubble.h]);
@@ -160,6 +171,8 @@ function buildMap() {
     [-104, -34, -96, -26], [-100, -59, -90, -51], [-110, -70, -96, -52], [-94, 0, -84, 8],                 // generator, PaP, tunnel, pedestal
     [-86, 20, -74, 32], [3, -85, 11, -77],                                                                // boat, quick revive
   ];
+  for (const p of perks) keepClear.push([p.x - 2.5, p.z - 2.5, p.x + 2.5, p.z + 2.5]);
+  for (const r of radios) keepClear.push([r.x - 2, r.z - 2, r.x + 2, r.z + 2]);
   for (const q of questItems) keepClear.push([q.x - 2, q.z - 2, q.x + 2, q.z + 2]);
   for (const c of crystals) keepClear.push([c.x - 1.5, c.z - 1.5, c.x + 1.5, c.z + 1.5]);
   for (const w of wallbuys) keepClear.push([w.x - 2.5, w.z - 2.5, w.x + 2.5, w.z + 2.5]);
@@ -347,7 +360,7 @@ function buildMap() {
   const destructible = decor.filter(d => d.oi !== undefined).map(d => d.oi);
   return {
     bounds: BOUNDS, zones: ZONES, doors: DOORS, walls, decor, obstacles, bushes, campfires,
-    boxes, bank, perks, perkSize, wallbuys, ammoCrates, escapes, wallH: WALL_H,
+    boxes, bank, perks, perkSize, radios, wallbuys, ammoCrates, escapes, wallH: WALL_H,
     generator, pap, questItems, crystals, pedestal, rubble, rubbleIdx, destructible,
   };
 }

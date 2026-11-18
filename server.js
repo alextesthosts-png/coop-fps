@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const { Server } = require('socket.io');
 const { buildMap } = require('./map');
 const db = require('./db');
@@ -192,6 +193,21 @@ const DIFF = {
   hardcore: { name: 'Hardcore', hp: 1.35, dmg: 1.5, drop: 0.6, cr: 1.25 },
 };
 let difficulty = 'normal';
+// ---------- Radio (shared music) ----------
+let TRACKS = [];
+try { TRACKS = JSON.parse(fs.readFileSync(path.join(__dirname, 'public/assets/audio/radio.json'), 'utf8')); } catch (e) { console.warn('[radio] no tracklist', e.message); }
+const radio = { idx: Math.floor(Math.random() * Math.max(1, TRACKS.length)), start: Date.now(), on: true, by: null };
+const radioState = () => ({ idx: radio.idx, elapsed: Date.now() - radio.start, on: radio.on, by: radio.by });
+function setTrack(idx, by) {
+  if (!TRACKS.length) return;
+  radio.idx = ((idx % TRACKS.length) + TRACKS.length) % TRACKS.length;
+  radio.start = Date.now(); radio.on = true; radio.by = by || null;
+  io.emit('radio', radioState());
+}
+setInterval(() => {
+  if (radio.on && TRACKS.length && Date.now() - radio.start > (TRACKS[radio.idx].dur + 1.5) * 1000) setTrack(radio.idx + 1, null);
+}, 1000);
+const tombs = {};
 const QUICK_LINES = ['Help me!', 'Reloading!', 'Follow me!', 'Need ammo!', 'Mystery Box here!', 'Thanks!', 'Revive me!', 'Watch out — boss!'];
 
 // ================= Game state =================
@@ -376,6 +392,7 @@ function killEnemy(e, p, how) {
     award(p, how === 'head' ? 100 : how === 'knife' ? 130 : 60, how === 'head' ? 'Headshot kill' : how === 'knife' ? 'Knife kill' : 'Kill');
   }
   io.emit('enemyKilled', { id: e.id, by: p ? p.id : null, head: how === 'head', boss: e.type === 'boss', bk: e.bk, name: p ? p.name : '', how });
+  if (p && p.perks.vulture && Math.random() < 0.18) { award(p, 50, 'Vulture Aid'); io.to(p.id).emit('vulture', { x: e.x, z: e.z }); }
   if (e.type === 'exploder') zombieBlast(e);
   // blown-up walkers keep crawling
   if (e.type === 'brute' && (how === 'explosion' || how === 'fire') && Math.random() < 0.35) {
@@ -424,7 +441,7 @@ function explode(x, y, z, r, dmg, owner, type) {
 // Exploder zombies burst and hurt everyone close by
 function zombieBlast(e) {
   io.emit('boom', { x: e.x, y: 1, z: e.z, r: 4, type: 'bile' });
-  for (const p of Object.values(players)) if (standing(p) && near(p, e.x, e.z, 4)) damagePlayer(p, 35, { x: e.x, z: e.z });
+  for (const p of Object.values(players)) if (standing(p) && !p.perks.phd && near(p, e.x, e.z, 4)) damagePlayer(p, 35, { x: e.x, z: e.z });
   for (const o of Object.values(enemies)) if (o !== e && near(o, e.x, e.z, 4)) hurtEnemy(o, 80, null, 'explosion');
 }
 
@@ -581,7 +598,7 @@ function victory(aboard) {
 }
 function resetRun() {
   resetting = false;
-  for (const o of [enemies, medkits, projs, fires, powerDrops, claymores, turrets]) for (const k in o) delete o[k];
+  for (const o of [enemies, medkits, projs, fires, powerDrops, claymores, turrets, tombs]) for (const k in o) delete o[k];
   shockwaves.length = 0;
   powers.double = powers.insta = 0;
   if (waveTimer) { clearTimeout(waveTimer); waveTimer = null; }
@@ -611,6 +628,7 @@ function sendInit(socket) {
     powerDrops, fires: Object.values(fires).map(f => ({ ...f, ms: f.until - now() })), escape: escState(),
     bossNames: Object.fromEntries(Object.entries(BOSS_KINDS).map(([k, v]) => [k, v.name])),
     quest: questState(), destroyed: [...destroyed], claymores: Object.values(claymores), turrets: Object.values(turrets).map(t => ({ ...t, ms: t.until - now() })),
+    radio: radioState(), tombs: Object.values(tombs).map(t => ({ id: t.id, owner: t.owner, name: t.name, x: t.x, z: t.z })),
     difficulty, difficulties: Object.fromEntries(Object.entries(DIFF).map(([k, v]) => [k, v.name])), quickLines: QUICK_LINES,
   });
   socket.emit('loadout', { weapons: p.weapons, cur: p.cur, reset: true });
@@ -690,6 +708,17 @@ io.on('connection', socket => {
       }
     }
     for (const u of Object.values(powerDrops)) if (near(p, u.x, u.z, 1.6) && feetOf(p) < 2.5) takePower(u, p);
+    for (const tb of Object.values(tombs)) {
+      if (tb.owner !== p.id || !near(p, tb.x, tb.z, 1.8)) continue;
+      delete tombs[tb.id];
+      for (const k of tb.perks) p.perks[k] = true;
+      if (p.perks.jug) { p.maxHealth = 200; p.health = Math.max(p.health, 100); }
+      p.weapons = tb.weapons.filter(w => WEAPONS[w]).slice(0, maxSlots(p));
+      p.cur = 0; p.dirty = true;
+      io.to(p.id).emit('loadout', { weapons: p.weapons, cur: p.cur, reset: true });
+      io.emit('tombGone', { id: tb.id, by: p.id });
+      notice(p.id, 'Tombstone recovered — your weapons and perks are back!', 'perk');
+    }
     for (const q of MAP.questItems) {
       if (!quest.items[q.id] && near(p, q.x, q.z, 1.6) && feetOf(p) < 2.5) {
         quest.items[q.id] = true;
@@ -700,6 +729,21 @@ io.on('connection', socket => {
         emitQuest();
       }
     }
+  });
+
+  socket.on('radio', d => {
+    if (!d || !p.alive || !TRACKS.length || now() - (p.lastRadio || 0) < 600) return;
+    if (!MAP.radios.some(r => near(p, r.x, r.z, 3.5))) return;
+    p.lastRadio = now();
+    if (d.action === 'next') setTrack(radio.idx + 1, p.name);
+    else if (d.action === 'prev') setTrack(radio.idx - 1, p.name);
+    else if (d.action === 'off') { radio.on = !radio.on; radio.by = p.name; if (radio.on) radio.start = Date.now(); io.emit('radio', radioState()); }
+  });
+
+  socket.on('flop', () => {
+    if (!standing(p) || !p.perks.phd || now() - (p.lastFlop || 0) < 1500) return;
+    p.lastFlop = now();
+    explode(p.x, 0.4, p.z, 4.5, 250 + wave * 20, p.id, 'phd');
   });
 
   socket.on('switch', slot => { if (Number.isInteger(slot) && p.weapons[slot]) p.cur = slot; });
@@ -728,7 +772,7 @@ io.on('connection', socket => {
       if (!e) continue;
       if (W.kind === 'melee' && !near(p, e.x, e.z, W.range + e.r + 1)) continue;
       const zone = ZONE_MULT[h.zone] ? h.zone : 'body';
-      const base = W.dmg * (p.perks.dtap ? 2 : 1);
+      const base = W.dmg * (p.perks.dtap ? 2 : 1) * (p.perks.deathperc ? 1.15 : 1);
       if (!damaged.has(e.id)) { damaged.add(e.id); award(p, 10, 'Hit'); }
       if (W.frost) {
         e.frost = Math.min(e.type === 'boss' ? 0.6 : 1, e.frost + W.frost);
@@ -752,6 +796,7 @@ io.on('connection', socket => {
     socket.broadcast.emit('meleeSwing', { id: p.id });
     const e = enemies[d.id];
     if (!e || !near(p, e.x, e.z, 3.2 + e.r)) return;
+    if (p.perks.widow && e.type !== 'boss') { e.webUntil = now() + 4000; io.emit('webs', { x: e.x, z: e.z, ids: [e.id] }); }
     hurtEnemy(e, 150 * (p.perks.dtap ? 1.5 : 1), p, 'knife');
   });
 
@@ -1031,6 +1076,12 @@ function damagePlayer(target, amount, from) {
   }
   target.health -= amount;
   io.to(target.id).emit('damaged', from);
+  if (target.perks.widow && now() > (target.webCd || 0)) {
+    target.webCd = now() + 12000;
+    const ids = [];
+    for (const e of Object.values(enemies)) if (e.type !== 'boss' && near(e, target.x, target.z, 7)) { e.webUntil = now() + 6000; ids.push(e.id); }
+    io.emit('webs', { x: target.x, z: target.z, ids, burst: true });
+  }
   if (target.health <= 0) downPlayer(target);
 }
 
@@ -1060,6 +1111,13 @@ function killPlayer(target) {
   target.downed = false;
   const lost = Math.floor(target.credits * 0.25);
   target.credits -= lost;
+  if (target.perks.tombstone) {
+    for (const k in tombs) if (tombs[k].owner === target.id) { delete tombs[k]; io.emit('tombGone', { id: k }); }
+    const id = 'tb' + (++projSeq);
+    const perks = Object.keys(target.perks).filter(k => k !== 'tombstone');
+    tombs[id] = { id, owner: target.id, name: target.name, x: target.x, z: target.z, weapons: target.weapons.slice(), perks, until: now() + 120000 };
+    io.emit('tombSpawn', { id, owner: target.id, name: target.name, x: target.x, z: target.z });
+  }
   target.perks = {};
   target.maxHealth = 100;
   target.armor = 0;
@@ -1306,6 +1364,7 @@ function simulate() {
     }
   }
   for (const u of Object.values(powerDrops)) if (t > u.until) { delete powerDrops[u.id]; io.emit('puGone', { id: u.id }); }
+  for (const tb of Object.values(tombs)) if (t > tb.until || !players[tb.owner]) { delete tombs[tb.id]; io.emit('tombGone', { id: tb.id }); }
   escapeTick(dt);
 
   for (const e of elist) {
@@ -1316,7 +1375,7 @@ function simulate() {
     if (process.env.FREEZE) continue; // testing: enemies stand still
     if (e.frozenUntil > t) continue;
     if (e.ch) { juggernautCharge(e, dt); if (!enemies[e.id]) continue; continue; }
-    const slow = 1 - 0.75 * e.frost;
+    const slow = (1 - 0.75 * e.frost) * (e.webUntil > t ? 0.25 : 1);
     const step = e.speed * dt * slow * (e.beam ? (e.beam.ph === 'charge' ? 0 : 0.3) : 1);
 
     // Monkey bombs pull every zombie in range
@@ -1392,6 +1451,7 @@ function simulate() {
     if (e.ch) { s.ch = e.ch.ph; s.a = +e.ch.a.toFixed(3); }
     if (e.frost > 0.05) s.fz = e.frozenUntil > t ? 2 : r2(e.frost);
     if (e.helmet > 0) s.hm = 1;
+    if (e.webUntil > t) s.wb = 1;
   }
   const pj = {};
   for (const p of Object.values(projs)) pj[p.id] = { t: p.type, x: r2(p.x), y: r2(p.y), z: r2(p.z), r: p.rest ? 1 : 0 };

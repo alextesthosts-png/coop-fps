@@ -10,12 +10,81 @@ export function initAudio() {
   master.gain.value = 0.6;
   const comp = ctx.createDynamicsCompressor();
   master.connect(comp).connect(ctx.destination);
+  loadSamples();
   noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
 }
 
-export function setVolume(v) { if (master) master.gain.value = v; }
+export function setVolume(v) { masterV = v; if (master) master.gain.value = v; applyMusic(); }
+let masterV = 0.6;
+
+// ---------- Recorded samples (/assets/audio) ----------
+const SAMPLE_FILES = ['w-pistol', 'w-rifle', 'w-rifle2', 'w-sniper', 'w-raygun', 'w-rpg', 'w-reload', 'boss-appears', 'boss-killed', 'intro-lets-go', 'intro-woopee'];
+const samples = {};
+let samplesLoading = false;
+function loadSamples() {
+  if (samplesLoading || !ctx) return;
+  samplesLoading = true;
+  for (const n of SAMPLE_FILES) {
+    fetch(`/assets/audio/${n}.mp3`).then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b)).then(buf => { samples[n] = buf; }).catch(e => console.warn('sample failed', n, e));
+  }
+}
+const voices = [];
+// play a sample; returns the source (or null if not loaded yet)
+function sample(name, pos, vol = 1, rate = 1, dur) {
+  const buf = samples[name];
+  if (!ok() || !buf) return null;
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.playbackRate.value = rate;
+  src.connect(out(pos, vol));
+  const t = ctx.currentTime;
+  src.start(t);
+  if (dur) src.stop(t + dur);
+  voices.push(src);
+  src.onended = () => { const i = voices.indexOf(src); if (i >= 0) voices.splice(i, 1); };
+  while (voices.length > 24) { const v = voices.shift(); try { v.stop(); } catch {} }
+  return src;
+}
+export function bossAppears() { sample('boss-appears', null, 0.9); }
+export function bossKilled() { sample('boss-killed', null, 1); }
+export function intro() { sample('intro-woopee', null, 0.7); setTimeout(() => sample('intro-lets-go', null, 1), 700); }
+
+// ---------- Music: menu loop + shared radio ----------
+const menuEl = typeof Audio !== 'undefined' ? new Audio('/assets/audio/menu.mp3') : null;
+const radioEl = typeof Audio !== 'undefined' ? new Audio() : null;
+if (menuEl) { menuEl.loop = true; menuEl.preload = 'auto'; }
+if (radioEl) radioEl.preload = 'auto';
+let musicV = 0.45, inMenu = true, unlocked = false, radioSrc = null, radioStart = 0, radioOn = true;
+try { const v = localStorage.getItem('fps-music'); if (v !== null) musicV = +v; } catch {}
+export const musicVolume = () => musicV;
+export function setMusicVolume(v) { musicV = v; try { localStorage.setItem('fps-music', v); } catch {} applyMusic(); }
+export function setMenu(on) { inMenu = on; applyMusic(); }
+// url of the track, ms already played on the server's clock, on/off
+export function setRadio(url, elapsedMs, on) {
+  radioOn = on;
+  radioStart = performance.now() - elapsedMs;
+  if (url && url !== radioSrc) { radioSrc = url; radioEl.src = url; }
+  applyMusic(true);
+}
+export function unlockMusic() { unlocked = true; applyMusic(); }
+function applyMusic(resync) {
+  if (!menuEl || !unlocked) return;
+  const v = Math.max(0, Math.min(1, musicV * masterV * 1.4));
+  menuEl.volume = v; radioEl.volume = v;
+  if (inMenu) {
+    radioEl.pause();
+    if (menuEl.paused && v > 0) menuEl.play().catch(() => {});
+    if (v === 0) menuEl.pause();
+    return;
+  }
+  menuEl.pause();
+  if (!radioOn || !radioSrc || v === 0) { radioEl.pause(); return; }
+  const want = (performance.now() - radioStart) / 1000;
+  const sync = () => { if (Math.abs(radioEl.currentTime - want) > 1.5 || resync) { try { radioEl.currentTime = Math.max(0, (performance.now() - radioStart) / 1000); } catch {} } };
+  if (radioEl.readyState >= 1) sync(); else radioEl.addEventListener('loadedmetadata', sync, { once: true });
+  if (radioEl.paused) radioEl.play().catch(() => {});
+}
 
 // Keep the listener in sync with the camera
 export function updateListener(pos, forward) {
@@ -87,8 +156,11 @@ const GUN_SOUNDS = {
   sniper:  { nf: 1400, nd: 0.7,  thump: 55,  vol: 1.0 },
   lmg:     { nf: 1500, nd: 0.2,  thump: 90,  vol: 0.85 },
 };
+const GUN_SAMPLE = { pistol: ['w-pistol', 0.8], rifle: ['w-rifle', 0.75], smg: ['w-rifle', 0.55], mp5: ['w-rifle', 0.6], ak: ['w-rifle2', 0.6], lmg: ['w-rifle2', 0.55], sniper: ['w-sniper', 0.9], raygun: ['w-raygun', 0.7], cryo: ['w-raygun', 0.5] };
 export function gunshot(weapon, pos) {
   if (!ok()) return;
+  const gs = GUN_SAMPLE[weapon];
+  if (gs && samples[gs[0]]) { sample(gs[0], pos, gs[1] * (pos ? 1.1 : 0.8), (weapon === 'smg' ? 1.12 : weapon === 'cryo' ? 0.8 : 1) * (0.96 + Math.random() * 0.08)); return; }
   const t = ctx.currentTime, dest = out(pos, pos ? 0.9 : 0.55);
   if (weapon === 'raygun') {
     tone(dest, t, 0.25, { type: 'square', freq: 1400, freqEnd: 180, vol: 0.35 });
@@ -110,6 +182,7 @@ export function dryFire() {
 }
 export function reload(duration) {
   if (!ok()) return;
+  if (samples['w-reload'] && duration >= 0.5) { sample('w-reload', null, 0.8, Math.min(2.2, Math.max(1, 2.75 / duration)), duration + 0.05); return; }
   const t = ctx.currentTime, dest = out(null, 0.5);
   noise(dest, t + 0.05, 0.05, { type: 'bandpass', freq: 2000, q: 5, vol: 0.6 });                // mag out
   noise(dest, t + duration * 0.6, 0.06, { type: 'bandpass', freq: 1500, q: 5, vol: 0.7 });       // mag in
@@ -339,6 +412,7 @@ export function chainsaw(pos) {
 }
 export function rocketLaunch(pos) {
   if (!ok()) return;
+  if (samples['w-rpg']) { sample('w-rpg', pos, pos ? 1.1 : 0.85); return; }
   const t = ctx.currentTime, dest = out(pos, 1);
   noise(dest, t, 0.9, { type: 'bandpass', freq: 600, freqEnd: 2500, q: 1, vol: 0.9, attack: 0.02 });
   tone(dest, t, 0.3, { freq: 90, freqEnd: 40, vol: 0.7 });

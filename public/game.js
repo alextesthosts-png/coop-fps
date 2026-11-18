@@ -491,6 +491,7 @@ function buildWorld() {
   buildStations();
   buildHelicopter();
   buildQuestWorld();
+  buildRadios();
   rebuildObst();
 }
 
@@ -1021,7 +1022,8 @@ function warmUp() {
   ball.position.set(pos.x, 1, pos.z - 4); scene.add(ball); temp.push(ball);
   const ds = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0xff1744, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }));
   const dc = new THREE.Mesh(new THREE.CircleGeometry(1, 8), new THREE.MeshBasicMaterial({ color: 0x4a0000, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
-  for (const m of [ds, dc]) { m.position.set(pos.x, 0.5, pos.z - 4); scene.add(m); temp.push(m); }
+  const wb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.75, 1), new THREE.MeshBasicMaterial({ color: 0xf5f5f5, wireframe: true, transparent: true, opacity: 0.55 }));
+  for (const m of [ds, dc, wb]) { m.position.set(pos.x, 0.5, pos.z - 4); scene.add(m); temp.push(m); }
   try { renderer.compile(scene, camera); } catch (e) { console.warn('warm-up failed', e); }
   for (const o of temp) scene.remove(o);
 }
@@ -1150,7 +1152,7 @@ function addFire(f) {
 const booms = [];
 function boomFx({ x, y, z, r, type }) {
   const p = new THREE.Vector3(x, Math.max(0.3, y), z);
-  const color = type === 'monkey' ? 0xffd54f : type === 'bolt' ? 0xff7043 : 0xff9100;
+  const color = type === 'monkey' ? 0xffd54f : type === 'bolt' ? 0xff7043 : type === 'phd' ? 0xce93d8 : 0xff9100;
   const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false }));
   ball.position.copy(p);
   scene.add(ball);
@@ -1269,13 +1271,22 @@ function showPoints(amount, reason) {
   setTimeout(() => el.remove(), 1000);
 }
 function renderPlayerList() {
-  hud.list.innerHTML = Object.values(playerInfo).map(p => {
-    const cls = (p.id === myId ? 'me ' : '') + (p.alive === false ? 'deadp' : '');
-    return `<li class="${cls}"><span class="dot" style="background:${hex(p.color)}"></span>${escapeHtml(p.name)}${p.id === myId ? ' (you)' : ''}` +
-      `<span class="hp">${p.dn ? '<b class="down">✚ DOWN</b> ' : ''}${p.kills || 0}☠ ${Math.max(0, Math.round(p.health ?? 100))}♥ <span class="cr">${p.credits ?? 0}¢</span></span></li>`;
+  const perkDot = id => { const pk = MAP?.perks.find(k => k.id === id); return pk ? `<i style="background:${hex(pk.color)}" title="${pk.name}">${PERK_ICON[id] || '★'}</i>` : ''; };
+  hud.list.innerHTML = Object.values(playerInfo).sort((a, b) => (a.id === myId ? -1 : b.id === myId ? 1 : 0)).map(p => {
+    const st = stateCache[p.id] || {};
+    const maxH = st.maxHealth || 100, hp = Math.max(0, Math.round(p.id === myId ? health : (p.health ?? 100)));
+    const dead = p.alive === false, dn = !!p.dn;
+    const cls = (p.id === myId ? 'me ' : '') + (dead ? 'deadp ' : '') + (dn ? 'dnp' : '');
+    const arm = Math.round(st.armor || 0);
+    return `<li class="${cls}">
+      <div class="row1"><span class="dot" style="background:${hex(p.color)}"></span><span class="nm">${escapeHtml(p.name)}${p.id === myId ? ' <small>(you)</small>' : ''}</span>
+        <span class="hp">${dead ? '☠ DEAD' : dn ? '<b class="down">✚ DOWN</b>' : `${hp}/${maxH}`}</span></div>
+      <div class="hpbar"><div style="width:${dead ? 0 : Math.min(100, hp / maxH * 100)}%" class="${hp <= maxH * 0.3 || dn ? 'low' : ''}"></div>${arm ? `<div class="arm" style="width:${arm / 150 * 100}%"></div>` : ''}</div>
+      <div class="row2"><span class="perks">${(st.perks || []).map(perkDot).join('')}</span><span class="stats">${p.kills || 0}☠ <span class="cr">${(p.credits ?? 0).toLocaleString()}¢</span></span></div>
+    </li>`;
   }).join('');
 }
-const PERK_ICON = { jug: '❤', dtap: '⚡', sprint: '»', speed: '↻', mule: '+', deadshot: '◎', cherry: 'ϟ' };
+const PERK_ICON = { jug: '❤', dtap: '⚡', sprint: '»', speed: '↻', mule: '+', deadshot: '◎', cherry: 'ϟ', revive: '✚', phd: '☢', widow: 'Ж', vulture: 'V', deathperc: '◉', tombstone: '✝' };
 let lastPerkKey = '';
 function renderPerks(perks) {
   const key = perks.join(',');
@@ -1401,8 +1412,13 @@ function addPlayer(p) {
 }
 function addEnemy(e) {
   enemyObjs[e.id] = { mesh: makeEnemy(e), target: { x: e.x, z: e.z }, hp: e.hp, maxHp: e.maxHp, type: e.type, bk: e.bk, growlT: rnd(1, 6), beam: null, attackT: 0 };
-  if (e.type === 'boss') SFX.bossRoar(new THREE.Vector3(e.x, 3, e.z));
+  if (e.type === 'boss') {
+    SFX.bossRoar(new THREE.Vector3(e.x, 3, e.z));
+    const n = performance.now();
+    if (n - lastBossSfx > 5000) { lastBossSfx = n; SFX.bossAppears(); } // once, even when several bosses spawn together
+  }
 }
+let lastBossSfx = -1e9;
 
 socket.on('playerJoined', p => { addPlayer(p); renderPlayerList(); banner(`${p.name} joined`, 1500); });
 socket.on('playerLeft', id => {
@@ -1430,7 +1446,7 @@ socket.on('state', s => {
   for (const [id, part] of Object.entries(s.players)) {
     const p = stateCache[id] = Object.assign(stateCache[id] || {}, part);
     const info = playerInfo[id];
-    if (info) Object.assign(info, { health: p.health, alive: p.alive, kills: p.kills, credits: p.credits, dn: p.dn });
+    if (info) Object.assign(info, { health: p.health, alive: p.alive, kills: p.kills, credits: p.credits, dn: p.dn, color: info.color });
     if (id === myId) {
       health = p.health; maxHealth = p.maxHealth; armor = p.armor; credits = p.credits; bank = p.bank; myPerks = p.perks; hiddenState = p.hid;
       throwables = { fr: p.fr ?? 0, mo: p.mo ?? 0, mk: p.mk ?? 0, cl: p.cl ?? 0, tu: p.tu ?? 0 };
@@ -1445,7 +1461,7 @@ socket.on('state', s => {
     const o = enemyObjs[id];
     if (!o) { pendingEnemies.set(id, { id, ...e }); continue; }
     o.target.x = e.x; o.target.z = e.z; o.hp = e.hp; o.maxHp = e.maxHp; o.beam = e.beam || null;
-    o.fz = e.fz || 0; o.ch = e.ch || null; o.cha = e.a; if (!e.hm && o.mesh.userData.helmet?.visible) knockHelmet(o);
+    o.fz = e.fz || 0; o.wb = !!e.wb; o.ch = e.ch || null; o.cha = e.a; if (!e.hm && o.mesh.userData.helmet?.visible) knockHelmet(o);
   }
   for (const id of pendingEnemies.keys()) if (!s.enemies[id]) pendingEnemies.delete(id);
   for (const id of Object.keys(enemyObjs)) if (!s.enemies[id]) removeEnemy(id, false);
@@ -1477,7 +1493,8 @@ socket.on('tracer', ({ from, tos, w }) => {
   w = baseKey(w);
   if (w === 'chainsaw') SFX.chainsaw(p);
   else if (w === 'crossbow') SFX.crossbow(p);
-  else if (w !== 'rpg') SFX.gunshot(w, p);
+  else if (w === 'rpg') SFX.rocketLaunch(p);
+  else SFX.gunshot(w, p);
 });
 socket.on('enemyHit', ({ id, hp, by, helmet }) => {
   const o = enemyObjs[id];
@@ -1494,7 +1511,7 @@ socket.on('enemyKilled', ({ id, by, head, boss, bk, name, how }) => {
   if (o && how === 'explosion' && o.type === 'exploder') { /* boom handled by server 'boom' */ }
   removeEnemy(id, head ? 'head' : true);
   if (by === myId) { hitmarker(head); SFX.hitTick(head); }
-  if (boss) banner(`${name || 'Someone'} SLEW ${BOSS_NAMES[bk] || 'THE BOSS'}!`, 3000, 'boss');
+  if (boss) { banner(`${name || 'Someone'} SLEW ${BOSS_NAMES[bk] || 'THE BOSS'}!`, 3000, 'boss'); SFX.bossKilled(); }
 });
 socket.on('enemyAttack', ({ id }) => {
   const o = enemyObjs[id];
@@ -1660,6 +1677,7 @@ addEventListener('keydown', e => {
   if (!locked) return;
   if (e.code === 'Enter') { e.preventDefault(); openChat(); return; }
   if (e.code === 'KeyB') { toggleQuick(); return; }
+  if (e.code === 'KeyM' && !e.repeat) { mmBig = !mmBig; sizeMinimap(); return; }
   if (quickOpen && /^Digit[1-8]$/.test(e.code)) { socket.emit('chat', { quick: +e.code.slice(5) - 1 }); toggleQuick(false); return; }
   if (!alive) return;
   if (e.code === 'KeyE' && reviveTarget) { socket.emit('revive', { id: reviveTarget, on: true }); reviving = reviveTarget; return; }
@@ -1684,12 +1702,14 @@ addEventListener('keydown', e => {
     else if (t.type === 'wall') socket.emit('buy', { what: 'wall', id: t.id });
     else if (t.type === 'ammo') socket.emit('buy', { what: 'ammo', id: t.id });
     else if (t.type === 'escape') socket.emit('buy', { what: 'escape', route: t.route });
+    else if (t.type === 'jukebox') socket.emit('radio', { action: 'next' });
     else if (t.type === 'generator') socket.emit('buy', { what: 'power' });
     else if (t.type === 'pap') socket.emit('buy', { what: 'pap' });
     else if (t.type === 'cryo') socket.emit('buy', { what: 'cryo' });
     else if (t.type === 'bank') socket.emit('bank', { action: 'deposit' });
   }
   if (e.code === 'KeyF' && interactTarget?.type === 'bank') socket.emit('bank', { action: 'withdraw' });
+  if (e.code === 'KeyF' && interactTarget?.type === 'jukebox') socket.emit('radio', { action: 'off' });
   if (e.code === 'KeyT' && giveTarget) socket.emit('give', { to: giveTarget });
 });
 addEventListener('keyup', e => {
@@ -1718,8 +1738,15 @@ function toggleCrouch() {
 }
 
 const canvas = renderer.domElement;
+let introPlayed = false;
+addEventListener('pointerdown', () => { SFX.initAudio(); SFX.unlockMusic(); }, { once: true });
+const musicSlider = $('music');
+musicSlider.value = SFX.musicVolume();
+musicSlider.addEventListener('input', () => SFX.setMusicVolume(+musicSlider.value));
 $('play-btn').addEventListener('click', () => {
   SFX.initAudio();
+  SFX.unlockMusic();
+  if (!introPlayed) { introPlayed = true; setTimeout(() => SFX.intro(), 250); }
   const name = $('name-input').value.trim();
   if (name) { socket.emit('setName', name); try { localStorage.setItem('fps-name', name); } catch {} }
   canvas.requestPointerLock();
@@ -1746,6 +1773,7 @@ canvas.addEventListener('click', () => { if (!locked) { SFX.initAudio(); canvas.
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
   hud.overlay.classList.toggle('hidden', locked);
+  SFX.setMenu(!locked);
   $('play-btn').textContent = 'CLICK TO RESUME';
   if (!locked) { mouseDown = false; aiming = false; }
   else SFX.setVolume(+vol.value);
@@ -1775,7 +1803,7 @@ const camPos = new THREE.Vector3();
 const vel = new THREE.Vector3();
 let feetY = 0, eyeH = STAND_EYE, crouched = false;
 let onGround = false, stamina = 1, staminaDelay = 0, sprinting = false, stepDist = 0;
-let vaultState = null;
+let vaultState = null, fallTop = 0;
 
 function collideXZ(axis) {
   for (const [bx, bz, w, d, h] of OBST) {
@@ -1907,8 +1935,11 @@ function updatePlayer(dt) {
   pos.z += vel.z * dt; collideXZ('z');
   feetY += vel.y * dt;
   const ground = groundHeightAt(pos.x, pos.z, feetY);
+  if (!onGround) fallTop = Math.max(fallTop, feetY);
   if (feetY <= ground) {
     if (!onGround && vel.y < -6) SFX.land();
+    if (!onGround && fallTop - ground >= 2.2 && hasPerk('phd')) { socket.emit('flop'); shake = 0.35; }
+    fallTop = ground;
     feetY = ground; vel.y = 0; onGround = true;
   } else onGround = false;
 
@@ -2086,6 +2117,10 @@ function updateInteraction() {
       else if (wave < (R.minWave || 1)) lines.push(`${R.name}: not yet… survive until <b>wave ${R.minWave}</b>`);
       else if (miss.length) lines.push(`${R.name} — still needed: <b>${miss.join(', ')}</b>`);
       else lines.push(`<b>[E]</b> Pay up to 2500¢ towards the <b>${R.name.toLowerCase()}</b> — <b>${(e.fund && e.fund[best.route]) || 0} / ${R.cost}</b>`);
+    } else if (best.type === 'jukebox') {
+      const tr = TRACKS[radioSt.idx];
+      lines.push(`<b>[E]</b> Next song &nbsp; <b>[F]</b> Radio ${radioSt.on ? 'off' : 'on'}`);
+      lines.push(`<span class="sub">${radioSt.on && tr ? '♪ ' + escapeHtml(tr.title) : 'Radio is off'}</span>`);
     } else if (best.type === 'generator') {
       lines.push(quest.power ? 'The generator is running' : '<b>[E]</b> Switch on the power — perks, Pack-a-Punch and the radio need it');
     } else if (best.type === 'pap') {
@@ -2124,54 +2159,95 @@ function updateInteraction() {
 
 // ================= Minimap =================
 const mm = hud.minimap.getContext('2d');
+let mmBig = false, mmW = 0, mmH = 0;
+function sizeMinimap() {
+  const b = MAP ? MAP.bounds : { x1: -110, x2: 110, z1: -110, z2: 40 };
+  const aspect = (b.z2 - b.z1) / (b.x2 - b.x1);
+  mmW = mmBig ? Math.min(innerWidth * 0.8, 1000) : Math.min(380, innerWidth * 0.3);
+  mmH = Math.round(mmW * aspect);
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  hud.minimap.width = Math.round(mmW * dpr); hud.minimap.height = Math.round(mmH * dpr);
+  hud.minimap.style.width = mmW + 'px'; hud.minimap.style.height = mmH + 'px';
+  hud.minimap.classList.toggle('big', mmBig);
+  mm.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+sizeMinimap();
+addEventListener('resize', sizeMinimap);
+const MM_ICON = { box: ['?', '#40c4ff'], bank: ['$', '#ffd54f'], ammo: ['A', '#b388ff'], escape: ['⇪', '#76ff03'], pap: ['P', '#e040fb'], generator: ['⚡', '#ffeb3b'], cryo: ['❄', '#80deea'], jukebox: ['♪', '#f06292'] };
 function drawMinimap() {
-  const b = MAP.bounds, W = hud.minimap.width, H = hud.minimap.height;
+  const b = MAP.bounds, W = mmW, H = mmH;
   const s = Math.min(W / (b.x2 - b.x1), H / (b.z2 - b.z1));
   const X = x => (x - b.x1) * s, Z = z => (z - b.z1) * s;
+  const big = mmBig, k = big ? 1.6 : 1, now = performance.now();
   mm.clearRect(0, 0, W, H);
-  const zoneCol = { grid: '#33415a', grass: '#33522c', dirt: '#5e4b36', stone: '#55585c', concrete: '#4f5a50', snow: '#9fb3c2' };
-  const reach = new Set(['main']);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const d of MAP.doors) if (openDoors.has(d.id)) for (const [a, c] of [d.zones, [...d.zones].reverse()]) if (reach.has(a) && !reach.has(c)) { reach.add(c); changed = true; }
-  }
+  const zoneCol = { grid: '#2e3b52', grass: '#2f4d29', dirt: '#56452f', stone: '#4c4f53', concrete: '#47524a', snow: '#8399a8' };
+  const reach = openZoneSet();
   for (const z of MAP.zones) {
     const open = reach.has(z.id);
-    mm.fillStyle = open ? zoneCol[z.floor] : 'rgba(30,30,30,.85)';
+    mm.fillStyle = open ? zoneCol[z.floor] : 'rgba(20,20,20,.9)';
     mm.fillRect(X(z.x1), Z(z.z1), (z.x2 - z.x1) * s, (z.z2 - z.z1) * s);
-    if (!open) { mm.fillStyle = '#888'; mm.font = '9px sans-serif'; mm.textAlign = 'center'; mm.fillText('🔒 ' + z.name, X((z.x1 + z.x2) / 2), Z((z.z1 + z.z2) / 2) + 3); }
   }
-  mm.fillStyle = 'rgba(0,0,0,.35)';
+  mm.fillStyle = 'rgba(0,0,0,.45)';
   for (const [x, z, w, d, h] of OBST) if (h > 1.3) mm.fillRect(X(x - w / 2), Z(z - d / 2), Math.max(1, w * s), Math.max(1, d * s));
-  for (const d of MAP.doors) { mm.fillStyle = openDoors.has(d.id) ? '#69f0ae' : '#ffb300'; mm.fillRect(X(d.x) - 3, Z(d.z) - 3, 6, 6); }
+  mm.strokeStyle = 'rgba(79,195,247,.6)'; mm.lineWidth = 1;
+  for (const z of MAP.zones) mm.strokeRect(X(z.x1) + 0.5, Z(z.z1) + 0.5, (z.x2 - z.x1) * s - 1, (z.z2 - z.z1) * s - 1);
+  // zone names
+  mm.textAlign = 'center'; mm.textBaseline = 'middle';
+  for (const z of MAP.zones) {
+    const open = reach.has(z.id);
+    mm.font = `${big ? 'bold 16px' : 'bold 10px'} sans-serif`;
+    mm.fillStyle = open ? 'rgba(255,255,255,.28)' : '#9e9e9e';
+    mm.fillText((open ? '' : '🔒 ') + z.name.toUpperCase(), X((z.x1 + z.x2) / 2), Z(z.z1) + (big ? 16 : 9));
+  }
+  for (const d of MAP.doors) {
+    const op = openDoors.has(d.id);
+    mm.fillStyle = op ? '#69f0ae' : '#ffb300';
+    mm.fillRect(X(d.x) - 4 * k, Z(d.z) - 4 * k, 8 * k, 8 * k);
+    if (!op && big) { mm.fillStyle = '#ffd54f'; mm.font = '11px sans-serif'; mm.fillText(d.cost + '¢', X(d.x), Z(d.z) + 13); }
+  }
   for (const [rid, R] of Object.entries(MAP.escapes)) {
     const pad = R.pad;
-    mm.strokeStyle = escState.route === rid && escState.phase === 'board' ? '#76ff03' : '#ffeb3b'; mm.lineWidth = 1.5;
-    mm.beginPath(); mm.arc(X(pad.x), Z(pad.z), pad.r * s, 0, 7); mm.stroke();
+    mm.strokeStyle = escState.route === rid && escState.phase === 'board' ? '#76ff03' : '#ffeb3b'; mm.lineWidth = 2;
+    mm.beginPath(); mm.arc(X(pad.x), Z(pad.z), Math.max(4, pad.r * s), 0, 7); mm.stroke();
   }
-  for (const q of MAP.questItems) if (!quest.items[q.id] && reachZone(q.x, q.z)) { mm.fillStyle = '#ffab00'; mm.fillRect(X(q.x) - 2, Z(q.z) - 2, 4, 4); }
-  for (const c of Object.values(placedObjs)) { mm.fillStyle = c.kind === 'turret' ? '#80d8ff' : '#aed581'; mm.fillRect(X(c.x) - 1.5, Z(c.z) - 1.5, 3, 3); }
-  for (const p of pings) { mm.strokeStyle = p.color; mm.lineWidth = 2; mm.beginPath(); mm.arc(X(p.pos.x), Z(p.pos.z), 4 + Math.sin(performance.now() / 120) * 1.5, 0, 7); mm.stroke(); }
+  for (const q of MAP.questItems) if (!quest.items[q.id] && reach.has(zoneAtPos(q.x, q.z)?.id)) { mm.fillStyle = '#ffab00'; mm.fillRect(X(q.x) - 3 * k, Z(q.z) - 3 * k, 6 * k, 6 * k); }
+  for (const c of Object.values(placedObjs)) { mm.fillStyle = c.kind === 'turret' ? '#80d8ff' : '#aed581'; mm.fillRect(X(c.x) - 2, Z(c.z) - 2, 4, 4); }
+  for (const tb of Object.values(tombObjs)) if (tb.owner === myId) { mm.fillStyle = '#cfd8dc'; mm.font = `${12 * k}px sans-serif`; mm.fillText('✝', X(tb.x), Z(tb.z)); }
+  // stations with letter icons
   for (const st of Object.values(stations)) {
     if (st.type === 'door') continue;
-    mm.fillStyle = st.type === 'box' ? '#40c4ff' : st.type === 'bank' ? '#ffd54f' : st.type === 'wall' ? '#ffffff' : st.type === 'ammo' ? '#b388ff' : st.type === 'escape' ? '#76ff03' : st.type === 'pap' ? '#e040fb' : st.type === 'generator' ? '#ffeb3b' : st.type === 'cryo' ? '#80deea' : hex(st.data.color);
-    mm.beginPath(); mm.arc(X(st.x), Z(st.z), st.type === 'wall' ? 1.6 : 2.5, 0, 7); mm.fill();
+    const x = X(st.x), z = Z(st.z);
+    if (st.type === 'wall') { mm.fillStyle = 'rgba(255,255,255,.75)'; mm.fillRect(x - 1.5 * k, z - 1.5 * k, 3 * k, 3 * k); continue; }
+    const ic = st.type === 'perk' ? [PERK_ICON[st.id] || 'P', hex(st.data.color)] : MM_ICON[st.type];
+    if (!ic) continue;
+    const r = 5.5 * k;
+    mm.fillStyle = 'rgba(0,0,0,.65)'; mm.beginPath(); mm.arc(x, z, r, 0, 7); mm.fill();
+    mm.strokeStyle = ic[1]; mm.lineWidth = 1.5; mm.stroke();
+    mm.fillStyle = ic[1]; mm.font = `bold ${Math.round(7.5 * k)}px sans-serif`; mm.fillText(ic[0], x, z + 0.5);
+    if (big && st.type === 'perk') { mm.font = '10px sans-serif'; mm.fillStyle = '#ddd'; mm.fillText(st.data.name, x, z + r + 8); }
   }
-  for (const g of Object.values(medkitObjs)) { mm.fillStyle = '#fff'; mm.fillRect(X(g.userData.x) - 2, Z(g.userData.z) - 2, 4, 4); }
-  for (const u of Object.values(puObjs)) { mm.fillStyle = '#ffd54f'; mm.beginPath(); mm.arc(X(u.x), Z(u.z), 3, 0, 7); mm.fill(); }
-  for (const o of Object.values(enemyObjs)) {
+  for (const g of Object.values(medkitObjs)) { mm.fillStyle = '#fff'; mm.fillRect(X(g.userData.x) - 3, Z(g.userData.z) - 1, 6, 2); mm.fillRect(X(g.userData.x) - 1, Z(g.userData.z) - 3, 2, 6); }
+  for (const u of Object.values(puObjs)) { mm.fillStyle = '#ffd54f'; mm.beginPath(); mm.arc(X(u.x), Z(u.z), 3.5 * k, 0, 7); mm.fill(); }
+  if (difficulty !== 'hardcore') for (const o of Object.values(enemyObjs)) {
     mm.fillStyle = o.type === 'boss' ? '#e040fb' : o.type === 'hound' ? '#ff9100' : '#ff5252';
-    mm.beginPath(); mm.arc(X(o.mesh.position.x), Z(o.mesh.position.z), o.type === 'boss' ? 4 : 1.6, 0, 7); mm.fill();
+    mm.beginPath(); mm.arc(X(o.mesh.position.x), Z(o.mesh.position.z), (o.type === 'boss' ? 5 : 2) * k, 0, 7); mm.fill();
   }
+  for (const p of pings) { mm.strokeStyle = p.color; mm.lineWidth = 2; mm.beginPath(); mm.arc(X(p.pos.x), Z(p.pos.z), 5 * k + Math.sin(now / 120) * 1.5, 0, 7); mm.stroke(); }
+  const arrow = (x, z, a, col, size) => {
+    mm.save(); mm.translate(x, z); mm.rotate(-a);
+    mm.fillStyle = col; mm.strokeStyle = '#000'; mm.lineWidth = 1.5;
+    mm.beginPath(); mm.moveTo(0, -size); mm.lineTo(size * 0.7, size * 0.7); mm.lineTo(0, size * 0.3); mm.lineTo(-size * 0.7, size * 0.7); mm.closePath(); mm.fill(); mm.stroke();
+    mm.restore();
+  };
   for (const [id, r] of Object.entries(remote)) {
     if (!playerInfo[id]?.alive) continue;
-    mm.fillStyle = r.target.dn ? (Math.sin(performance.now() / 150) > 0 ? '#ff1744' : '#fff') : hex(playerInfo[id].color);
-    mm.beginPath(); mm.arc(X(r.mesh.position.x), Z(r.mesh.position.z), 3, 0, 7); mm.fill();
+    const x = X(r.mesh.position.x), z = Z(r.mesh.position.z);
+    if (r.target.dn) { mm.fillStyle = Math.sin(now / 150) > 0 ? '#ff1744' : '#fff'; mm.font = `bold ${13 * k}px sans-serif`; mm.fillText('✚', x, z); }
+    else arrow(x, z, r.mesh.rotation.y, hex(playerInfo[id].color), 6 * k);
+    mm.font = `${big ? 12 : 9}px sans-serif`; mm.fillStyle = hex(playerInfo[id].color); mm.fillText(playerInfo[id].name, x, z - 10 * k);
   }
-  mm.save(); mm.translate(X(pos.x), Z(pos.z)); mm.rotate(-yaw);
-  mm.fillStyle = '#fff'; mm.beginPath(); mm.moveTo(0, -6); mm.lineTo(4, 4); mm.lineTo(-4, 4); mm.closePath(); mm.fill();
-  mm.restore();
+  arrow(X(pos.x), Z(pos.z), yaw, '#ffffff', 7.5 * k);
+  if (big) { mm.font = '12px sans-serif'; mm.fillStyle = 'rgba(255,255,255,.6)'; mm.textAlign = 'right'; mm.fillText('[M] close map', W - 8, H - 10); }
 }
 
 // ================= Main loop =================
@@ -2309,6 +2385,7 @@ function animate() {
     const boss = o.type === 'boss';
     const frozen = o.fz === 2;
     animateSpecial(o, ud, t, dt, stepLen);
+    perkVisuals(o, ud, t);
     if (boss) { bossHp += Math.max(0, o.hp); bossMax += o.maxHp; bossNames.add(BOSS_NAMES[o.bk] || 'BOSS'); }
     if (ud.mixer) {
       o.attackT -= dt;
@@ -2889,6 +2966,9 @@ function applyInit(data) {
   downed = false; setDowned(false);
   if (boat) { boat.leaving = false; boat.y = boat.target = -4; }
   renderQuick();
+  for (const id in tombObjs) removeTomb(id);
+  for (const t of data.tombs || []) addTomb(t);
+  if (data.radio) applyRadio(data.radio, false);
 }
 
 // ---------- downed / revive ----------
@@ -3091,6 +3171,8 @@ function reloadPose(W) {
 // ---------- per-frame updates ----------
 function updateExtras(dt, t) {
   if (!questObjs) return;
+  for (const r of radioObjs) { r.note.visible = radioSt.on; r.note.position.y = 1.5 + ((t * 0.6 + r.g.position.x) % 1) * 0.8; r.note.material.opacity = 1 - ((t * 0.6 + r.g.position.x) % 1); r.body.scale.y = radioSt.on ? 1 + Math.abs(Math.sin(t * 8)) * 0.012 : 1; }
+  for (const tb of Object.values(tombObjs)) { tb.g.userData.ring.material.opacity = 0.4 + Math.sin(t * 4) * 0.3; tb.g.rotation.y += dt * 0.3; }
   for (const [id, o] of Object.entries(questObjs.items)) if (o.g.visible) { o.m.rotation.y += dt * 1.2; o.m.position.y = 0.3 + Math.sin(t * 2 + o.g.position.x) * 0.1; }
   for (const m of Object.values(questObjs.crystals)) if (m.visible) { m.rotation.y += dt; m.material.emissiveIntensity = 0.8 + Math.sin(t * 3) * 0.5; }
   if (quest.cryo) { questObjs.pedGun.rotation.y += dt * 1.5; questObjs.pedGun.position.y = MAP.pedestal.h + 0.45 + Math.sin(t * 2) * 0.08; }
@@ -3195,6 +3277,8 @@ const fogColor = new THREE.Color();
 
 let questHtml = '';
 function updateExtraHud() {
+  const pp = document.getElementById('players-panel').getBoundingClientRect();
+  hud.quest.style.top = (difficulty === 'hardcore' ? 16 : Math.round(pp.bottom + 10)) + 'px';
   if (downed) {
     hud.downedInfo.textContent = myDown.rv > 0 ? 'A teammate is reviving you…' : Object.keys(remote).length ? `Bleeding out in ${myDown.bl}s — call for help (B)` : `Quick Revive will get you back up…`;
     hud.downedBar.style.width = (myDown.rv * 100) + '%';
@@ -3304,6 +3388,124 @@ addEventListener('keydown', e => {
 });
 
 
-setInterval(renderPlayerList, 500);
+
+// ================= v6: radios, music, new perks =================
+let TRACKS = [], radioSt = { idx: 0, elapsed: 0, on: true, by: null }, radioRecv = 0;
+const tombObjs = {};
+fetch('/assets/audio/radio.json').then(r => r.json()).then(t => { TRACKS = t; applyRadio(radioSt, false); }).catch(() => {});
+function applyRadio(st, announce) {
+  radioSt = st; radioRecv = performance.now();
+  const tr = TRACKS[st.idx];
+  if (!tr) return;
+  SFX.setRadio('/assets/audio/' + tr.file, st.elapsed, st.on);
+  if (announce) {
+    if (!st.on) showNotice(`📻 ${st.by || 'Someone'} turned the radio off`, 'info');
+    else showNotice(`♪ Now playing: ${tr.title}${st.by ? ` — picked by ${st.by}` : ''}`, 'perk');
+  }
+}
+socket.on('radio', st => applyRadio(st, true));
+
+function radioTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 320;
+  const g = c.getContext('2d');
+  const wood = g.createLinearGradient(0, 0, 256, 0); wood.addColorStop(0, '#5d3a1a'); wood.addColorStop(0.5, '#8b5a2b'); wood.addColorStop(1, '#5d3a1a');
+  g.fillStyle = wood; g.fillRect(0, 0, 256, 320);
+  for (let y = 0; y < 320; y += 7) { g.strokeStyle = `rgba(40,20,5,${0.15 + Math.random() * 0.15})`; g.beginPath(); g.moveTo(0, y + Math.random() * 4); g.bezierCurveTo(80, y + 5, 170, y - 5, 256, y + Math.random() * 4); g.stroke(); }
+  // dial window
+  g.fillStyle = '#1a1208'; g.fillRect(24, 22, 208, 70);
+  const dial = g.createLinearGradient(0, 28, 0, 86); dial.addColorStop(0, '#ffe8a3'); dial.addColorStop(1, '#e0a84a');
+  g.fillStyle = dial; g.fillRect(30, 28, 196, 58);
+  g.fillStyle = '#3e2a10'; g.font = 'bold 13px monospace'; g.textAlign = 'center';
+  ['88', '92', '96', '100', '104', '108'].forEach((f, i) => g.fillText(f, 44 + i * 34, 48));
+  for (let i = 0; i <= 40; i++) { g.fillRect(36 + i * 4.6, 56, 1, i % 5 ? 6 : 12); }
+  g.fillStyle = '#c62828'; g.fillRect(140, 30, 3, 54);
+  g.fillStyle = '#3e2a10'; g.font = 'bold 11px sans-serif'; g.fillText('ZOMBIE FM', 128, 82);
+  // speaker grille
+  g.fillStyle = '#2b1d0e'; g.beginPath(); g.ellipse(128, 200, 92, 78, 0, 0, 7); g.fill();
+  g.fillStyle = '#c9a66b';
+  for (let y = 130; y < 275; y += 9) for (let x = 40; x < 220; x += 9) { if (((x - 128) / 92) ** 2 + ((y - 200) / 78) ** 2 < 0.92) { g.beginPath(); g.arc(x, y, 2.3, 0, 7); g.fill(); } }
+  // knobs
+  for (const x of [52, 204]) { g.fillStyle = '#1a1208'; g.beginPath(); g.arc(x, 298, 13, 0, 7); g.fill(); g.fillStyle = '#d7b46a'; g.beginPath(); g.arc(x, 298, 9, 0, 7); g.fill(); g.fillStyle = '#1a1208'; g.fillRect(x - 1, 289, 2, 9); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const radioObjs = [];
+function buildRadios() {
+  const tex = radioTexture();
+  const front = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 });
+  const side = std(0x6d4321, { roughness: 0.7 });
+  for (const r of MAP.radios || []) {
+    const g = new THREE.Group(); g.position.set(r.x, 0, r.z);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(r.w, r.h, r.d), [side, side, side, side, front, front]);
+    body.position.y = r.h / 2; body.castShadow = true; g.add(body); solids.push(body);
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(r.w / 2, r.w / 2, r.d, 16, 1, false, 0, Math.PI), side);
+    top.rotation.set(Math.PI / 2, 0, Math.PI / 2); top.position.y = r.h; top.scale.z = 0.5; g.add(top);
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.8, 5), M.metal); ant.position.set(r.w * 0.3, r.h + 0.5, 0); ant.rotation.z = -0.35; g.add(ant);
+    const label = makeLabel(['📻 RADIO', '[E] next song · [F] on/off'], '#f06292', 2.2); label.position.y = r.h + 1.3; g.add(label);
+    const note = textSprite('♪', '#f48fb1', 0.5); note.position.y = r.h + 0.3; g.add(note);
+    const zn = zoneAtPos(r.x, r.z);
+    if (zn) g.rotation.y = Math.atan2((zn.x1 + zn.x2) / 2 - r.x, (zn.z1 + zn.z2) / 2 - r.z); // face into the area
+    scene.add(g);
+    radioObjs.push({ g, note, body });
+    stations['radio:' + r.id] = { type: 'jukebox', id: r.id, x: r.x, z: r.z, r: 3.3 };
+  }
+}
+function tombModel(name) {
+  const g = new THREE.Group();
+  const stone = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.0, 0.22), M.grave); stone.position.y = 0.5; stone.castShadow = true;
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.22, 14, 1, false, 0, Math.PI), M.grave); top.rotation.set(Math.PI / 2, 0, Math.PI / 2); top.position.y = 1.0;
+  const cross = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.4, 0.03), new THREE.MeshBasicMaterial({ color: 0x80cbc4 })); cross.position.set(0, 0.7, 0.12);
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.03), cross.material); bar.position.set(0, 0.78, 0.12);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.0, 24), new THREE.MeshBasicMaterial({ color: 0x80cbc4, transparent: true, opacity: 0.7 })); ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04;
+  const label = makeLabel([`${name}'s Tombstone`], '#80cbc4', 2); label.position.y = 1.7;
+  g.add(stone, top, cross, bar, ring, label);
+  g.userData.ring = ring;
+  return g;
+}
+function addTomb(t) {
+  if (tombObjs[t.id]) return;
+  const g = tombModel(t.name); g.position.set(t.x, 0, t.z); scene.add(g);
+  tombObjs[t.id] = { ...t, g };
+}
+function removeTomb(id) { const t = tombObjs[id]; if (t) { burst(t.g.position.clone().setY(0.8), 0x80cbc4, 16, 1); scene.remove(t.g); delete tombObjs[id]; } }
+socket.on('tombSpawn', t => { addTomb(t); if (t.owner === myId) showNotice('Your Tombstone marks where you fell — walk over it to get your gear back', 'perk'); });
+socket.on('tombGone', ({ id }) => removeTomb(id));
+
+// Widow's Wine webs
+const WEB_MAT = new THREE.MeshBasicMaterial({ color: 0xf5f5f5, wireframe: true, transparent: true, opacity: 0.55 });
+const WEB_GEO = new THREE.IcosahedronGeometry(0.75, 1);
+socket.on('webs', ({ x, z, ids, burst: big }) => {
+  if (big) {
+    for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2; burst(new THREE.Vector3(x + Math.cos(a) * 1.5, 0.8, z + Math.sin(a) * 1.5), 0xeeeeee, 1, 0.9); }
+    SFX.whoosh(new THREE.Vector3(x, 1, z));
+  }
+  for (const id of ids) { const o = enemyObjs[id]; if (o) o.wb = true; }
+});
+// Vulture Aid: bonus ammo for the weapon in hand
+socket.on('vulture', ({ x, z }) => {
+  burst(new THREE.Vector3(x, 0.6, z), 0xc0ca33, 10, 0.7);
+  const W = curW(), a = ammo[loadout.cur];
+  if (a && !noAmmo(curKey())) { a.res = Math.min(W.reserve, a.res + Math.max(1, Math.ceil(W.reserve * 0.1))); }
+  SFX.pickup(new THREE.Vector3(x, 1, z));
+});
+// Death Perception: zombie markers through walls
+const DP_MAT = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'); g.fillStyle = '#ff3d00'; g.strokeStyle = '#000'; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(32, 6); g.lineTo(58, 32); g.lineTo(32, 58); g.lineTo(6, 32); g.closePath(); g.stroke(); g.fill();
+  return new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true, opacity: 0.85 });
+})();
+function perkVisuals(o, ud, t) {
+  // webs
+  if (o.wb) { if (!ud.web) { ud.web = new THREE.Mesh(WEB_GEO, WEB_MAT); ud.web.position.y = o.type === 'crawler' || o.type === 'hound' ? 0.5 : 1.1; ud.web.scale.y = o.type === 'crawler' || o.type === 'hound' ? 0.7 : 1.5; o.mesh.add(ud.web); } ud.web.visible = true; ud.web.rotation.y = t * 0.5; }
+  else if (ud.web) ud.web.visible = false;
+  // death perception
+  if (myPerks.includes('deathperc')) {
+    if (!ud.dp) { ud.dp = new THREE.Sprite(DP_MAT); ud.dp.scale.setScalar(0.35); ud.dp.renderOrder = 25; ud.dp.position.y = (ud.bar?.position.y || 2) - 0.6; o.mesh.add(ud.dp); }
+    ud.dp.visible = Math.hypot(o.mesh.position.x - pos.x, o.mesh.position.z - pos.z) < 35;
+  } else if (ud.dp) ud.dp.visible = false;
+}
+
+setInterval(renderPlayerList, 250);
 animate();
 
