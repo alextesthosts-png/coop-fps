@@ -16,6 +16,11 @@
   <div id="hidden-vignette"></div>
   <div id="scope"></div>
   <div id="points"></div>
+  <div id="dmg-nums"></div>
+  <div id="chat-log"></div>
+  <input id="chat-input" maxlength="120" placeholder="Say something… (Enter to send, Esc to cancel)" autocomplete="off" />
+  <div id="quick-menu"></div>
+  <div class="panel" id="quest-panel"></div>
 
   <canvas id="minimap" width="220" height="150"></canvas>
   <div id="notices"></div>
@@ -62,25 +67,29 @@
   <div id="zone-name"></div>
   <div id="prompt"></div>
   <div id="banner"></div>
+  <div id="downed">YOU ARE DOWN<small id="downed-info"></small><div class="bar"><div id="downed-fill"></div></div></div>
   <div id="dead">YOU DIED<br /><span>Respawning somewhere safe…</span><small id="dead-info"></small></div>
   <div id="victory"></div>
 
   <div id="overlay">
     <h1>CO-OP ARENA</h1>
-    <p>Survive the waves, open new areas, beat the bosses — then call the helicopter and escape.</p>
+    <p>Survive the waves, open new areas, beat the bosses — then find a way out.</p>
     <input id="name-input" maxlength="16" placeholder="Your name" />
     <button id="play-btn">CLICK TO PLAY</button>
     <div id="loading"><div class="spinner"></div></div>
     <div class="controls">
       <b>WASD</b> move · <b>Shift</b> sprint · <b>Space</b> jump / vault / climb · <b>C</b> crouch &amp; hide · <b>Left-click</b> shoot · <b>Right-click</b> aim · <b>R</b> reload<br />
-      <b>1 / 2 / 3 / Wheel</b> weapons · <b>V</b> knife · <b>G</b> grenade · <b>H</b> molotov · <b>Q</b> monkey bomb · <b>E</b> use / buy · <b>F</b> withdraw at bank · <b>T</b> give 100¢ · <b>Esc</b> pause
+      <b>1 / 2 / 3 / Wheel</b> weapons · <b>V</b> knife · <b>G</b> grenade · <b>H</b> molotov · <b>Q</b> monkey bomb · <b>X</b> claymore · <b>Z</b> sentry turret<br />
+      <b>E</b> use / buy / hold to revive · <b>F</b> withdraw at bank · <b>T</b> give 100¢ · <b>Middle-click</b> ping · <b>Enter</b> chat · <b>B</b> quick chat · <b>J</b> objectives · <b>Esc</b> pause
     </div>
     <div class="cols">
       <div class="guide">
         Earn credits: <b>+10</b> hit · <b>+60</b> kill · <b>+100</b> headshot · <b>+130</b> knife · <b>+1000</b> boss.<br />
         Spend them on the <b style="color:#40c4ff">Mystery Box</b>, <b>perks</b>, <b>wall-buys</b> (armor, grenades, molotovs, monkey bombs, guns), <b style="color:#b388ff">ammo crates</b> and <b style="color:#ffd54f">gates</b> to 5 more areas.<br />
         Zombies drop <b style="color:#ffd54f">power-ups</b>: 2X points, Max Ammo, Insta-Kill, Nuke. A <b style="color:#e040fb">boss</b> arrives every 5 waves — dodge rocks, jump the shockwave, get behind cover from the laser.<br />
-        <b style="color:#76ff03">End game:</b> from wave 12, pay into the radio in the Military Base together, hold out 90 s, then get on the helipad to escape.<br />
+        Turn on the <b style="color:#ffeb3b">generator</b> (Frozen Outpost) to power perks and <b style="color:#e040fb">Pack-a-Punch</b> (Ruins). Shatter 3 glowing crystals for a wonder weapon.<br />
+        Downed? Teammates hold <b>E</b> to revive you within 30 s. Watch for armored, exploding, crawling and gun-toting zombies — and hellhound rounds.<br />
+        <b style="color:#76ff03">Three ways out</b> (wave 12+): find the radio parts for the <b>helicopter</b>, the fuel for the <b>boat</b>, or blast open the <b>crypt tunnel</b> — then pay, hold the area and get on board.<br />
         Dying costs 25% of your wallet, your perks and armor — the <b style="color:#ffd54f">Bank</b> keeps credits safe.
       </div>
       <div class="savebox">
@@ -94,10 +103,11 @@
     </div>
     <div class="settings">
       <label class="vol">Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.6" /></label>
+      <label class="vol">Difficulty <select id="difficulty"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hardcore">Hardcore (no HUD)</option></select></label>
       <label class="vol">Graphics <select id="gfx"><option value="high">High</option><option value="low">Low (faster, no shadows)</option></select></label>
     </div>
     <div id="conn-status">Connecting…</div>
-    <div class="credits-line">Models: Blaster Kit &amp; Animated Survivors by Kenney (CC0) · Zombie by bachosoftdesign</div>
+    <div class="credits-line">Models: Blaster Kit by Kenney (CC0) · Survivors by Quaternius (CC0) · Zombie by bachosoftdesign · Goblin by Eric Oudin · Dragon by jeremy · Juggernaut mech (author uncredited)</div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>

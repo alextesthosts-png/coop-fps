@@ -12,7 +12,7 @@ export const WEAPON_MODELS = {
 // first-person length of each gun in metres
 const LENGTHS = { pistol: 0.36, rifle: 0.8, ak: 0.8, smg: 0.52, mp5: 0.56, shotgun: 0.85, sniper: 1.1, lmg: 0.95, raygun: 0.5, crossbow: 0.72, rpg: 1.0 };
 
-const A = { blasters: {}, grenade: null, crate: null, zombie: null, char: null, charClips: {}, skins: {}, ready: false };
+const A = { blasters: {}, grenade: null, crate: null, zombie: null, char: null, charClips: {}, skins: {}, players: {}, bosses: {}, ready: false };
 
 export async function loadAssets(onProgress) {
   const gl = new GLTFLoader();
@@ -45,6 +45,23 @@ export async function loadAssets(onProgress) {
   }
   for (const s of ['survivorMaleB', 'survivorFemaleA', 'zombieA', 'zombieC']) {
     jobs.push(track(tl.loadAsync(`/assets/chars/${s}.png`)).then(t => { if (t) { t.colorSpace = THREE.SRGBColorSpace; A.skins[s] = t; } }));
+  }
+  // Quaternius rigged survivors (CC0) for players
+  for (const n of ['adventurer', 'man']) {
+    jobs.push(track(gl.loadAsync(`/assets/players/${n}.glb`)).then(g => {
+      if (!g) return;
+      g.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+      A.players[n] = g;
+    }));
+  }
+  // Boss models (static meshes, animated procedurally in game.js)
+  for (const n of ['goblin', 'dragon', 'juggernaut']) {
+    jobs.push(track(gl.loadAsync(`/assets/bosses/${n}.glb`)).then(g => {
+      if (!g) return;
+      g.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+      g.scene.updateMatrixWorld(true);
+      A.bosses[n] = { scene: g.scene, box: new THREE.Box3().setFromObject(g.scene) };
+    }));
   }
   await Promise.all(jobs);
   A.ready = true;
@@ -120,24 +137,26 @@ export function zombieModel(height, tint) {
   const root = SkeletonUtils.clone(A.zombie.scene);
   root.scale.setScalar(height / 4.1);
   root.rotation.y = Math.PI; // face -z like everything else
-  if (tint) {
-    root.traverse(o => {
-      if (o.isMesh) {
-        o.material = o.material.clone();
-        o.material.color = new THREE.Color(tint);
-        o.material.emissive = new THREE.Color(tint).multiplyScalar(0.25);
-      }
-    });
-  }
+  // per-zombie materials so hit flashes / frost tint only affect this one
+  const mats = [];
+  let head = null;
+  root.traverse(o => {
+    if (o.isMesh) {
+      o.material = o.material.clone();
+      if (tint) { o.material.color = new THREE.Color(tint); o.material.emissive = new THREE.Color(tint).multiplyScalar(0.25); }
+      mats.push(o.material);
+    }
+    if (o.isBone && /Head$/.test(o.name) && !head) head = o;
+  });
   const holder = new THREE.Group(); holder.add(root);
   const mixer = new THREE.AnimationMixer(root);
   const clips = A.zombie.animations;
   const actions = {};
-  for (const [k, n] of [['walk', 'Walk'], ['walk2', 'Walk2'], ['attack', 'Attack'], ['die', 'Die'], ['die2', 'Die2'], ['scream', 'Scream'], ['hit', 'Hit_reaction'], ['crawl', 'Running_Crawl'], ['idle', 'Idle']]) {
+  for (const [k, n] of [['walk', 'Walk'], ['walk2', 'Walk2'], ['attack', 'Attack'], ['die', 'Die'], ['die2', 'Die2'], ['scream', 'Scream'], ['hit', 'Hit_reaction'], ['crawl', 'Running_Crawl'], ['crawl2', 'Crawl'], ['idle', 'Idle']]) {
     const c = clipByName(clips, n);
     if (c) actions[k] = mixer.clipAction(c);
   }
-  return { root: holder, mixer, actions };
+  return { root: holder, mixer, actions, mats, head };
 }
 
 // Kenney low-poly character (players + runner zombies)
@@ -153,4 +172,53 @@ export function kenneyModel(skin, height) {
   const actions = {};
   for (const k of ['idle', 'run', 'jump']) if (A.charClips[k]) actions[k] = mixer.clipAction(A.charClips[k]);
   return { root: holder, mixer, actions };
+}
+
+// Quaternius survivor for players. Returns { root, mixer, actions } or null.
+const PLAYER_CLIPS = {
+  adventurer: { idle: 'Idle_Gun', run: 'Run_Shoot', walk: 'Walk', jump: 'Roll', death: 'Death', shoot: 'Idle_Gun_Shoot', hit: 'HitRecieve' },
+  man: { idle: 'Man_Idle', run: 'Man_Run', walk: 'Man_Walk', jump: 'Man_Jump', death: 'Man_Death', shoot: 'Man_Punch', hit: 'Man_Idle' },
+};
+export function playerModel(kind, height) {
+  const src = A.players[kind];
+  if (!src) return null;
+  const root = SkeletonUtils.clone(src.scene);
+  root.scale.setScalar(height / (kind === 'man' ? 4.57 : 1.82));
+  root.rotation.y = Math.PI;
+  const holder = new THREE.Group(); holder.add(root);
+  const mixer = new THREE.AnimationMixer(root);
+  const actions = {};
+  for (const [k, n] of Object.entries(PLAYER_CLIPS[kind])) {
+    const c = clipByName(src.animations, n);
+    if (c) actions[k] = mixer.clipAction(c);
+  }
+  // right hand bone to attach the gun to
+  let hand = null;
+  root.traverse(o => { if (!hand && o.isBone && /wrist.?r|palm.?r|hand.?r/i.test(o.name.replace(/[._]/g, ''))) hand = o; });
+  return { root: holder, mixer, actions, hand };
+}
+
+// Static boss mesh scaled to `height` (or `length` for the dragon), facing -z.
+export function bossModel(kind, size) {
+  const src = A.bosses[kind];
+  if (!src) return null;
+  const m = src.scene.clone(true);
+  const sz = src.box.getSize(new THREE.Vector3()), c = src.box.getCenter(new THREE.Vector3());
+  let s;
+  const inner = new THREE.Group(); inner.add(m);
+  if (kind === 'dragon') {
+    s = size / sz.z; // size = wingspan; forward axis is +x
+    m.position.set(-c.x, -src.box.min.y, -c.z);
+    inner.rotation.y = Math.PI;
+  } else {
+    s = size / sz.y;
+    m.position.set(-c.x, -src.box.min.y, -c.z);
+    inner.rotation.y = Math.PI;
+  }
+  inner.scale.setScalar(s);
+  const holder = new THREE.Group(); holder.add(inner);
+  holder.userData.inner = inner;
+  holder.userData.mats = [];
+  m.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); holder.userData.mats.push(o.material); } });
+  return holder;
 }

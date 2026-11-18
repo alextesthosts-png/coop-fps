@@ -20,9 +20,11 @@ app.get('/health', (_req, res) => res.send('ok'));
 
 // ================= World =================
 const MAP = buildMap();
-if (process.env.ESC_FAST) Object.assign(MAP.escape, { defendMs: 4000, boardMs: 4000, minWave: 1, cost: 2000 }); // testing
+if (process.env.ESC_FAST) for (const e of Object.values(MAP.escapes)) Object.assign(e, { defendMs: 4000, boardMs: 4000, minWave: 1, cost: 2000 }); // testing
 const B = MAP.bounds;
+const DESTRUCTIBLE = new Set(MAP.destructible);
 const openDoors = new Set();
+const destroyed = new Set(); // obstacle indices smashed by the Juggernaut
 let openZones = new Set(['main']);
 
 function recomputeZones() {
@@ -44,7 +46,8 @@ const zoneOpen = id => openZones.has(id);
 const CELL = 8;
 let obstacles = [], buckets = new Map();
 function rebuildObstacles() {
-  obstacles = [...MAP.obstacles, ...MAP.doors.filter(d => !openDoors.has(d.id)).map(d => [d.x, d.z, d.w, d.d, MAP.wallH])];
+  obstacles = MAP.obstacles.filter((o, i) => !destroyed.has(i) && !(i === MAP.rubbleIdx && quest.rubble));
+  obstacles.push(...MAP.doors.filter(d => !openDoors.has(d.id)).map(d => [d.x, d.z, d.w, d.d, MAP.wallH]));
   buckets = new Map();
   for (const o of obstacles) {
     const [x, z, w, d] = o, m = 1.5;
@@ -142,36 +145,59 @@ function flowStep(x, z) {
 }
 
 // ================= Weapons =================
-// kind: hitscan (default) | bolt (explodes where it lands) | rocket (projectile) | melee (no ammo)
+// kind: hitscan (default) | bolt (explodes where it lands) | rocket (projectile) | melee (no ammo); frost: freezes enemies
 const WEAPONS = {
-  pistol:   { name: 'M1911 Pistol',       dmg: 22,  delay: 0.20,  mag: 12,  reserve: 96,  reload: 1.0, auto: false, spread: 0.004, pellets: 1, ammoCost: 300,  tracer: 0xffeb3b },
-  rifle:    { name: 'Assault Rifle',      dmg: 25,  delay: 0.11,  mag: 30,  reserve: 240, reload: 1.4, auto: true,  spread: 0.008, pellets: 1, ammoCost: 500,  tracer: 0xffeb3b },
-  ak:       { name: 'AK-47',              dmg: 34,  delay: 0.13,  mag: 30,  reserve: 210, reload: 1.6, auto: true,  spread: 0.012, pellets: 1, ammoCost: 600,  tracer: 0xffd180 },
-  smg:      { name: 'Vector SMG',         dmg: 17,  delay: 0.06,  mag: 40,  reserve: 280, reload: 1.2, auto: true,  spread: 0.02,  pellets: 1, ammoCost: 500,  tracer: 0xffcc80 },
-  mp5:      { name: 'MP5',                dmg: 21,  delay: 0.075, mag: 30,  reserve: 270, reload: 1.3, auto: true,  spread: 0.014, pellets: 1, ammoCost: 500,  tracer: 0xffe082 },
-  shotgun:  { name: 'Pump Shotgun',       dmg: 16,  delay: 0.75,  mag: 6,   reserve: 48,  reload: 2.0, auto: false, spread: 0.07,  pellets: 8, ammoCost: 450,  tracer: 0xffab40 },
-  sniper:   { name: 'Sniper Rifle',       dmg: 160, delay: 1.0,   mag: 5,   reserve: 40,  reload: 2.2, auto: false, spread: 0,     pellets: 1, ammoCost: 600,  tracer: 0xffffff },
-  lmg:      { name: 'RPK LMG',            dmg: 30,  delay: 0.085, mag: 100, reserve: 400, reload: 3.2, auto: true,  spread: 0.016, pellets: 1, ammoCost: 750,  tracer: 0xffeb3b },
-  raygun:   { name: 'Ray Gun',            dmg: 110, delay: 0.28,  mag: 20,  reserve: 160, reload: 1.8, auto: false, spread: 0.002, pellets: 1, ammoCost: 1500, tracer: 0x76ff03 },
-  crossbow: { name: 'Explosive Crossbow', dmg: 120, delay: 1.1,   mag: 1,   reserve: 20,  reload: 1.5, auto: false, spread: 0,     pellets: 1, ammoCost: 1000, tracer: 0xff7043, kind: 'bolt' },
-  rpg:      { name: 'RPG-7',              dmg: 0,   delay: 1.4,   mag: 1,   reserve: 12,  reload: 2.2, auto: false, spread: 0,     pellets: 1, ammoCost: 1500, tracer: 0xff5722, kind: 'rocket' },
+  pistol:   { name: 'M1911 Pistol',       dmg: 22,  delay: 0.20,  mag: 12,  reserve: 96,  reload: 1.0, auto: false, spread: 0.004, pellets: 1, ammoCost: 300,  tracer: 0xffeb3b, anim: 'pistol' },
+  rifle:    { name: 'Assault Rifle',      dmg: 25,  delay: 0.11,  mag: 30,  reserve: 240, reload: 1.4, auto: true,  spread: 0.008, pellets: 1, ammoCost: 500,  tracer: 0xffeb3b, anim: 'mag' },
+  ak:       { name: 'AK-47',              dmg: 34,  delay: 0.13,  mag: 30,  reserve: 210, reload: 1.6, auto: true,  spread: 0.012, pellets: 1, ammoCost: 600,  tracer: 0xffd180, anim: 'mag' },
+  smg:      { name: 'Vector SMG',         dmg: 17,  delay: 0.06,  mag: 40,  reserve: 280, reload: 1.2, auto: true,  spread: 0.02,  pellets: 1, ammoCost: 500,  tracer: 0xffcc80, anim: 'mag' },
+  mp5:      { name: 'MP5',                dmg: 21,  delay: 0.075, mag: 30,  reserve: 270, reload: 1.3, auto: true,  spread: 0.014, pellets: 1, ammoCost: 500,  tracer: 0xffe082, anim: 'mag' },
+  shotgun:  { name: 'Pump Shotgun',       dmg: 16,  delay: 0.75,  mag: 6,   reserve: 48,  reload: 2.0, auto: false, spread: 0.07,  pellets: 8, ammoCost: 450,  tracer: 0xffab40, anim: 'shells' },
+  sniper:   { name: 'Sniper Rifle',       dmg: 160, delay: 1.0,   mag: 5,   reserve: 40,  reload: 2.2, auto: false, spread: 0,     pellets: 1, ammoCost: 600,  tracer: 0xffffff, anim: 'mag' },
+  lmg:      { name: 'RPK LMG',            dmg: 30,  delay: 0.085, mag: 100, reserve: 400, reload: 3.2, auto: true,  spread: 0.016, pellets: 1, ammoCost: 750,  tracer: 0xffeb3b, anim: 'mag' },
+  raygun:   { name: 'Ray Gun',            dmg: 110, delay: 0.28,  mag: 20,  reserve: 160, reload: 1.8, auto: false, spread: 0.002, pellets: 1, ammoCost: 1500, tracer: 0x76ff03, anim: 'spin' },
+  crossbow: { name: 'Explosive Crossbow', dmg: 120, delay: 1.1,   mag: 1,   reserve: 20,  reload: 1.5, auto: false, spread: 0,     pellets: 1, ammoCost: 1000, tracer: 0xff7043, kind: 'bolt', boom: 260, anim: 'launcher' },
+  rpg:      { name: 'RPG-7',              dmg: 0,   delay: 1.4,   mag: 1,   reserve: 12,  reload: 2.2, auto: false, spread: 0,     pellets: 1, ammoCost: 1500, tracer: 0xff5722, kind: 'rocket', boom: 480, anim: 'launcher' },
   chainsaw: { name: 'Chainsaw',           dmg: 45,  delay: 0.1,   mag: 0,   reserve: 0,   reload: 0,   auto: true,  spread: 0,     pellets: 3, ammoCost: 0,    tracer: 0xffffff, kind: 'melee', range: 2.8 },
+  cryo:     { name: 'Cryo Cannon',        dmg: 40,  delay: 0.12,  mag: 40,  reserve: 160, reload: 1.8, auto: true,  spread: 0.01,  pellets: 1, ammoCost: 2000, tracer: 0x80deea, frost: 0.2, wonder: true, anim: 'spin' },
 };
+// Pack-a-Punch variants
+const PAP_NAMES = {
+  pistol: 'Twin Fangs', rifle: 'Thunder Rifle', ak: 'Red Storm', smg: 'Vortex', mp5: 'MP-Hex', shotgun: 'Hellmouth', sniper: 'Longinus',
+  lmg: 'Grim Harvester', raygun: 'Plasma Tsar', crossbow: 'Wrath Bolt', rpg: 'Doom Tube', chainsaw: 'The Ripper', cryo: 'Absolute Zero',
+};
+for (const [k, w] of Object.entries({ ...WEAPONS })) {
+  WEAPONS[k + '_pap'] = {
+    ...w, name: PAP_NAMES[k], dmg: Math.round(w.dmg * 2.2), delay: w.delay * 0.9,
+    mag: w.mag ? Math.ceil(w.mag * 1.5) + (w.mag === 1 ? 1 : 0) : 0, reserve: Math.ceil(w.reserve * 1.5),
+    boom: w.boom ? w.boom * 1.9 : undefined, frost: w.frost ? w.frost * 1.6 : undefined,
+    tracer: 0xe040fb, pap: true, base: k, ammoCost: w.ammoCost ? Math.round(w.ammoCost * 1.5) : 0,
+  };
+}
 const BOX_POOL = [['pistol', 5], ['smg', 12], ['mp5', 11], ['ak', 11], ['shotgun', 12], ['sniper', 9], ['lmg', 9], ['crossbow', 8], ['rpg', 7], ['chainsaw', 6], ['raygun', 5], ['monkey', 8]];
 const BOX_ROLL_MS = 2600;
 const ZONE_MULT = { head: 2, body: 1, legs: 0.75 };
-const CAPS = { frags: 4, molotovs: 3, monkeys: 3 };
+const CAPS = { frags: 4, molotovs: 3, monkeys: 3, claymores: 4, turrets: 1 };
 
 const BOSS_KINDS = {
-  king:     { name: 'BRUTE KING',  hp: 1.0, speed: 1.7, dmg: 35 },
-  warden:   { name: 'THE WARDEN',  hp: 0.9, speed: 1.5, dmg: 30 },
-  summoner: { name: 'HIVE MOTHER', hp: 0.8, speed: 1.9, dmg: 28 },
+  king:       { name: 'BRUTE KING',  hp: 1.0, speed: 1.7, dmg: 35 },
+  warden:     { name: 'THE WARDEN',  hp: 0.9, speed: 1.5, dmg: 30 },
+  summoner:   { name: 'HIVE MOTHER', hp: 0.8, speed: 1.9, dmg: 28 },
+  juggernaut: { name: 'JUGGERNAUT',  hp: 1.25, speed: 2.0, dmg: 45 },
 };
-const BOSS_ORDER = ['king', 'warden', 'summoner'];
+const BOSS_ORDER = ['king', 'warden', 'summoner', 'juggernaut'];
+const DIFF = {
+  easy:     { name: 'Easy',     hp: 0.7,  dmg: 0.6, drop: 1.5, cr: 1.0 },
+  normal:   { name: 'Normal',   hp: 1.0,  dmg: 1.0, drop: 1.0, cr: 1.0 },
+  hardcore: { name: 'Hardcore', hp: 1.35, dmg: 1.5, drop: 0.6, cr: 1.25 },
+};
+let difficulty = 'normal';
+const QUICK_LINES = ['Help me!', 'Reloading!', 'Follow me!', 'Need ammo!', 'Mystery Box here!', 'Thanks!', 'Revive me!', 'Watch out — boss!'];
 
 // ================= Game state =================
 const COLORS = [0x4fc3f7, 0xff8a65, 0xaed581, 0xba68c8, 0xffd54f, 0xf06292, 0x4db6ac, 0x9575cd];
 const RESPAWN_MS = 3000;
+const BLEED_MS = 30000;
 const START_CREDITS = Number(process.env.START_CREDITS) || 500;
 const START_WAVE = Math.max(1, Number(process.env.START_WAVE) || 1); // for testing
 const MAX_MEDKITS = 4;
@@ -182,17 +208,25 @@ const medkits = {};
 const projs = {};
 const fires = {};
 const powerDrops = {};
+const claymores = {};
+const turrets = {};
 const shockwaves = [];
 const powers = { double: 0, insta: 0 };
-let wave = START_WAVE - 1, enemySeq = 0, medSeq = 0, projSeq = 0, colorIdx = 0, waveTimer = null, tickN = 0, bossCount = 0;
+let wave = START_WAVE - 1, enemySeq = 0, medSeq = 0, projSeq = 0, colorIdx = 0, waveTimer = null, tickN = 0, bossCount = 0, dogRound = false;
 const boxBusy = {};
-const esc = { phase: 'idle', fund: 0, until: 0 };
+let papBusyUntil = 0;
+const quest = freshQuest();
+const esc = { route: null, phase: 'idle', fund: { heli: 0, boat: 0, tunnel: 0 }, until: 0, left: 0, paused: false };
 let resetting = false;
+
+function freshQuest() { return { power: false, items: {}, rubble: false, rubbleHits: 0, crystals: {}, cryo: false, cryoTaken: [] }; }
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
-const feetOf = p => p.y - (p.crouch ? 1.0 : 1.6);
+const feetOf = p => p.y - (p.downed ? 0.5 : p.crouch ? 1.0 : 1.6);
 const now = () => Date.now();
+const D = () => DIFF[difficulty];
+const standing = p => p.alive && !p.downed;
 
 function randomOpenPoint(margin) {
   const open = MAP.zones.filter(z => zoneOpen(z.id));
@@ -226,7 +260,7 @@ function weightedPick(pool) {
 function notice(id, text, kind = 'info') { io.to(id).emit('notice', { text, kind }); }
 function award(p, amount, reason) {
   if (!p) return;
-  if (powers.double > now()) amount *= 2;
+  amount = Math.round(amount * D().cr * (powers.double > now() ? 2 : 1));
   p.credits += amount; p.dirty = true;
   io.to(p.id).emit('points', { amount, reason });
 }
@@ -236,10 +270,14 @@ const maxSlots = p => (p.perks.mule ? 3 : 2);
 function publicPlayer(p) {
   return {
     id: p.id, name: p.name, color: p.color, skin: p.skin, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
-    health: p.health, maxHealth: p.maxHealth, armor: p.armor, alive: p.alive, kills: p.kills, c: p.crouch, hid: p.hidden,
+    health: p.health, maxHealth: p.maxHealth, armor: p.armor, alive: p.alive, dn: p.downed, kills: p.kills, c: p.crouch, hid: p.hidden,
     credits: p.credits, bank: p.bank, weapon: p.weapons[p.cur], perks: Object.keys(p.perks),
   };
 }
+function questState() {
+  return { power: quest.power, items: quest.items, rubble: quest.rubble, rubbleHits: quest.rubbleHits, crystals: quest.crystals, cryo: quest.cryo };
+}
+const emitQuest = () => io.emit('quest', questState());
 
 // ================= Saving =================
 async function saveProfile(p) {
@@ -282,27 +320,49 @@ function addEnemy(type, at, bossKind) {
   const id = 'e' + (++enemySeq);
   const pos = at || spawnPointForEnemy(type === 'boss' ? 28 : 20);
   const n = Math.max(1, Object.keys(players).length);
+  const sp = Math.min(wave * 0.15, 2.5);
   let e;
-  if (type === 'boss') {
-    const k = BOSS_KINDS[bossKind];
-    const hp = Math.round((1200 + wave * 120) * (0.7 + 0.3 * n) * k.hp);
-    e = { type, bk: bossKind, hp, speed: k.speed, r: 1.1, dmg: k.dmg, cd: 1.6, throwCd: 3, laserCd: 4, slamCd: 5, summonCd: 6 };
-  } else if (type === 'runner') {
-    e = { type, hp: 30 + wave * 5, speed: 5.5 + Math.min(wave * 0.15, 2.5), r: 0.4, dmg: 8, cd: 1 };
-  } else {
-    e = { type: 'brute', hp: 50 + wave * 10, speed: 3 + Math.min(wave * 0.15, 2.5), r: 0.45, dmg: 15, cd: 1 };
+  switch (type) {
+    case 'boss': {
+      const k = BOSS_KINDS[bossKind];
+      e = { type, bk: bossKind, hp: (1200 + wave * 120) * (0.7 + 0.3 * n) * k.hp, speed: k.speed, r: 1.1, dmg: k.dmg, cd: 1.6, throwCd: 3, laserCd: 4, slamCd: 5, summonCd: 6, chargeCd: 4 };
+      break;
+    }
+    case 'runner':  e = { type, hp: 30 + wave * 5, speed: 5.5 + sp, r: 0.4, dmg: 8, cd: 1 }; break;
+    case 'crawler': e = { type, hp: 40 + wave * 6, speed: 3.4 + sp, r: 0.45, dmg: 10, cd: 1 }; break;
+    case 'armored': e = { type, hp: 70 + wave * 12, helmet: 120 + wave * 15, speed: 2.7 + sp, r: 0.5, dmg: 18, cd: 1.1 }; break;
+    case 'exploder': e = { type, hp: 60 + wave * 8, speed: 2.6 + sp * 0.8, r: 0.55, dmg: 0, cd: 1 }; break;
+    case 'gunner':  e = { type, hp: 50 + wave * 10, speed: 2.8 + sp * 0.6, r: 0.45, dmg: 12, cd: 1, shotCd: rnd(1, 3) }; break;
+    case 'hound':   e = { type, hp: 25 + wave * 5, speed: 7.5 + sp * 0.5, r: 0.4, dmg: 10, cd: 0.8 }; break;
+    default:        e = { type: 'brute', hp: 50 + wave * 10, speed: 3 + sp, r: 0.45, dmg: 15, cd: 1 };
   }
-  enemies[id] = { id, ...pos, ...e, maxHp: e.hp, attackCd: 0, slide: Math.random() < 0.5 ? 1 : -1, wander: null, beam: null };
+  e.hp = Math.round(e.hp * D().hp);
+  enemies[id] = { id, ...pos, ...e, maxHp: e.hp, attackCd: 0, slide: Math.random() < 0.5 ? 1 : -1, wander: null, beam: null, frost: 0, frozenUntil: 0, lastFrostHit: 0, baseMult: D().hp };
   return enemies[id];
 }
 
-function maybeDrop(e) {
-  const chance = e.type === 'boss' ? 1 : 0.035;
-  if (Math.random() > chance) return;
-  const type = e.type === 'boss' ? 'maxammo' : weightedPick([['double', 30], ['maxammo', 30], ['insta', 25], ['nuke', 15]]);
+function rollEnemyType() {
+  const r = Math.random();
+  let acc = 0;
+  const table = [
+    ['gunner', wave >= 3 ? 0.05 : 0],
+    ['exploder', wave >= 4 ? 0.07 : 0],
+    ['crawler', wave >= 6 ? 0.08 : 0],
+    ['armored', wave >= 8 ? 0.1 : 0],
+    ['runner', Math.min(0.1 + wave * 0.05, 0.45)],
+  ];
+  for (const [t, p] of table) { acc += p; if (r < acc) return t; }
+  return 'brute';
+}
+
+function dropPower(x, z, type) {
   const id = 'pu' + (++projSeq);
-  powerDrops[id] = { id, type, x: e.x, z: e.z, until: now() + 25000 };
+  powerDrops[id] = { id, type, x, z, until: now() + 25000 };
   io.emit('puSpawn', powerDrops[id]);
+}
+function maybeDrop(e) {
+  if (e.type === 'boss') return dropPower(e.x, e.z, 'maxammo');
+  if (Math.random() < 0.035 * D().drop) dropPower(e.x, e.z, weightedPick([['double', 30], ['maxammo', 30], ['insta', 25], ['nuke', 15]]));
 }
 
 function killEnemy(e, p, how) {
@@ -315,8 +375,15 @@ function killEnemy(e, p, how) {
   } else if (p) {
     award(p, how === 'head' ? 100 : how === 'knife' ? 130 : 60, how === 'head' ? 'Headshot kill' : how === 'knife' ? 'Knife kill' : 'Kill');
   }
-  maybeDrop(e);
-  io.emit('enemyKilled', { id: e.id, by: p ? p.id : null, head: how === 'head', boss: e.type === 'boss', bk: e.bk, name: p ? p.name : '' });
+  io.emit('enemyKilled', { id: e.id, by: p ? p.id : null, head: how === 'head', boss: e.type === 'boss', bk: e.bk, name: p ? p.name : '', how });
+  if (e.type === 'exploder') zombieBlast(e);
+  // blown-up walkers keep crawling
+  if (e.type === 'brute' && (how === 'explosion' || how === 'fire') && Math.random() < 0.35) {
+    const c = addEnemy('crawler', { x: e.x, z: e.z });
+    c.hp = c.maxHp = Math.max(20, Math.round(c.hp * 0.5));
+  }
+  if (dogRound && !Object.values(enemies).some(x => x.type === 'hound')) { dogRound = false; dropPower(e.x, e.z, 'maxammo'); }
+  else maybeDrop(e);
   if (Object.keys(enemies).length === 0 && esc.phase !== 'defend') scheduleWave(6000);
 }
 
@@ -324,6 +391,7 @@ function killEnemy(e, p, how) {
 function hurtEnemy(e, dmg, p, how) {
   if (!enemies[e.id]) return;
   if (powers.insta > now() && e.type !== 'boss') dmg = e.hp + 1;
+  if (e.frozenUntil > now()) dmg *= 2;
   e.hp -= dmg;
   io.emit('enemyHit', { id: e.id, hp: e.hp, maxHp: e.maxHp, by: p ? p.id : null });
   if (e.hp <= 0) killEnemy(e, p, how);
@@ -341,18 +409,46 @@ function explode(x, y, z, r, dmg, owner, type) {
     hitAny = true;
   }
   if (hitAny && p) award(p, 10, 'Hit');
+  // explosions near the crypt rubble clear the tunnel escape
+  if (!quest.rubble && Math.hypot(x - MAP.rubble.x, z - MAP.rubble.z) < 6) {
+    quest.rubbleHits++;
+    if (quest.rubbleHits >= 3) {
+      quest.rubble = true;
+      rebuildObstacles();
+      io.emit('banner', { text: 'THE CRYPT TUNNEL IS OPEN!', cls: 'gold', ms: 4000 });
+    } else io.emit('notice', { text: `The crypt rubble cracks (${quest.rubbleHits}/3 explosions)`, kind: 'perk' });
+    emitQuest();
+  }
+}
+
+// Exploder zombies burst and hurt everyone close by
+function zombieBlast(e) {
+  io.emit('boom', { x: e.x, y: 1, z: e.z, r: 4, type: 'bile' });
+  for (const p of Object.values(players)) if (standing(p) && near(p, e.x, e.z, 4)) damagePlayer(p, 35, { x: e.x, z: e.z });
+  for (const o of Object.values(enemies)) if (o !== e && near(o, e.x, e.z, 4)) hurtEnemy(o, 80, null, 'explosion');
 }
 
 function startWave() {
   waveTimer = null;
   wave += 1;
   const bossWave = wave % 5 === 0;
-  let count = Math.min(3 + wave * 2, 34);
-  if (bossWave) count = Math.ceil(count * 0.5);
-  for (let i = 0; i < count; i++) addEnemy(Math.random() < Math.min(0.1 + wave * 0.05, 0.5) ? 'runner' : 'brute');
-  const bosses = bossWave ? Math.floor(wave / 5) : 0;
+  dogRound = !bossWave && wave % 7 === 0;
   const kinds = [];
-  for (let i = 0; i < bosses; i++) { const k = BOSS_ORDER[bossCount++ % BOSS_ORDER.length]; kinds.push(BOSS_KINDS[k].name); addEnemy('boss', null, k); }
+  let count;
+  if (dogRound) {
+    count = Math.min(6 + wave, 30);
+    for (let i = 0; i < count; i++) {
+      const at = spawnPointForEnemy(16);
+      setTimeout(() => { if (!resetting) { const h = addEnemy('hound', at); io.emit('lightning', { x: h.x, z: h.z }); } }, i * 250);
+    }
+  } else {
+    count = Math.min(3 + wave * 2, 34);
+    if (bossWave) count = Math.ceil(count * 0.5);
+    for (let i = 0; i < count; i++) addEnemy(rollEnemyType());
+    const bosses = bossWave ? Math.floor(wave / 5) : 0;
+    for (let i = 0; i < bosses; i++) { const k = BOSS_ORDER[bossCount++ % BOSS_ORDER.length]; kinds.push(BOSS_KINDS[k].name); addEnemy('boss', null, k); }
+    count += bosses;
+  }
   for (const p of Object.values(players)) {
     if (p.bank > 0) {
       const interest = Math.min(250, Math.floor(p.bank * 0.05));
@@ -360,13 +456,14 @@ function startWave() {
     }
     if (wave > p.bestWave) { p.bestWave = wave; p.dirty = true; }
   }
-  io.emit('wave', { wave, count: count + bosses, boss: bosses, bossNames: kinds });
+  io.emit('wave', { wave, count, boss: kinds.length, bossNames: kinds, dogs: dogRound });
 }
 
 function scheduleWave(delay) {
   if (waveTimer || resetting) return;
   if (wave > START_WAVE - 1) for (const p of Object.values(players)) if (p.alive) award(p, 100 + wave * 10, 'Wave cleared');
-  io.emit('waveIncoming', { wave: wave + 1, inMs: delay, boss: (wave + 1) % 5 === 0 });
+  const next = wave + 1;
+  io.emit('waveIncoming', { wave: next, inMs: delay, boss: next % 5 === 0, dogs: next % 5 !== 0 && next % 7 === 0 });
   waveTimer = setTimeout(startWave, delay);
   if (wave > 0) sendLeaderboard();
 }
@@ -382,12 +479,12 @@ function spawnMedkit() {
 setInterval(spawnMedkit, 15000);
 
 // ================= Projectiles (grenades, molotovs, monkey bombs, rockets) =================
-function spawnProj(type, owner, o, d) {
+function spawnProj(type, owner, o, d, extra = {}) {
   const id = 'p' + (++projSeq);
   const speed = { frag: 17, molotov: 15, monkey: 13, rocket: 45 }[type];
   const len = Math.hypot(d[0], d[1], d[2]) || 1;
   projs[id] = {
-    id, type, owner, x: o[0], y: o[1], z: o[2],
+    id, type, owner, x: o[0], y: o[1], z: o[2], ...extra,
     vx: d[0] / len * speed, vy: d[1] / len * speed + (type === 'rocket' ? 0 : 3), vz: d[2] / len * speed,
     born: now(), rest: false, fuse: type === 'frag' ? 2200 : type === 'monkey' ? 9000 : 4000,
   };
@@ -396,7 +493,7 @@ function detonate(pr) {
   delete projs[pr.id];
   io.emit('projGone', { id: pr.id });
   if (pr.type === 'frag') explode(pr.x, pr.y, pr.z, 6, 320, pr.owner, 'frag');
-  else if (pr.type === 'rocket') explode(pr.x, pr.y, pr.z, 5.5, 480, pr.owner, 'rocket');
+  else if (pr.type === 'rocket') explode(pr.x, pr.y, pr.z, pr.pap ? 7 : 5.5, pr.boom || 480, pr.owner, 'rocket');
   else if (pr.type === 'monkey') explode(pr.x, pr.y, pr.z, 7.5, 1500, pr.owner, 'monkey');
   else if (pr.type === 'molotov') {
     const id = 'f' + (++projSeq);
@@ -439,25 +536,35 @@ function stepProj(pr, dt) {
 }
 const activeMonkeys = () => Object.values(projs).filter(p => p.type === 'monkey' && p.rest);
 
-// ================= Escape (end game) =================
+// ================= Escape routes (end game) =================
 function escState() {
-  return { phase: esc.phase, fund: esc.fund, cost: MAP.escape.cost, left: Math.max(0, esc.until - now()), minWave: MAP.escape.minWave };
+  return { route: esc.route, phase: esc.phase, fund: esc.fund, left: esc.phase === 'defend' ? esc.left : Math.max(0, esc.until - now()), paused: esc.paused };
 }
 function setEscPhase(phase, ms) {
   esc.phase = phase; esc.until = now() + (ms || 0);
   io.emit('escape', escState());
 }
-function escapeTick() {
-  if (esc.phase === 'defend' && now() >= esc.until) {
-    setEscPhase('board', MAP.escape.boardMs);
-    io.emit('banner', { text: 'THE HELICOPTER IS LANDING — GET TO THE HELIPAD!', cls: 'boss', ms: 5000 });
+const missingFor = route => MAP.escapes[route].needs.filter(n => (n === 'power' ? !quest.power : n === 'rubble' ? !quest.rubble : !quest.items[n]));
+const NEED_NAMES = { power: 'power', rubble: 'blast the crypt rubble (3 explosions)', antenna: 'Radio Antenna', battery: 'Radio Battery', circuit: 'Circuit Board', fuel1: 'Fuel Canister #1', fuel2: 'Fuel Canister #2' };
+function escapeTick(dt) {
+  if (!esc.route) return;
+  const R = MAP.escapes[esc.route];
+  if (esc.phase === 'defend') {
+    // the countdown only runs while someone holds the area
+    const t = R.terminal;
+    esc.paused = !Object.values(players).some(p => standing(p) && near(p, t.x, t.z, 20));
+    if (!esc.paused) esc.left -= dt * 1000;
+    if (esc.left <= 0) {
+      setEscPhase('board', R.boardMs);
+      io.emit('banner', { text: esc.route === 'tunnel' ? 'THE TUNNEL IS CLEAR — EVERYONE INTO THE CRYPT!' : `THE ${R.name.toUpperCase()} IS HERE — GET ON BOARD!`, cls: 'boss', ms: 5000 });
+    }
   } else if (esc.phase === 'board' && now() >= esc.until) {
-    const pad = MAP.escape.pad;
-    const aboard = Object.values(players).filter(p => p.alive && near(p, pad.x, pad.z, pad.r));
+    const pad = R.pad;
+    const aboard = Object.values(players).filter(p => standing(p) && near(p, pad.x, pad.z, pad.r));
     if (!aboard.length) {
-      esc.fund = Math.floor(esc.fund / 2);
+      esc.fund[esc.route] = Math.floor(esc.fund[esc.route] / 2);
+      io.emit('banner', { text: `Nobody made it to the ${R.name.toLowerCase()}... half the fund was lost.`, cls: '', ms: 5000 });
       setEscPhase('funding');
-      io.emit('banner', { text: 'Nobody made it to the helicopter... it left. Half the fund was lost.', cls: '', ms: 5000 });
       return;
     }
     victory(aboard);
@@ -469,25 +576,23 @@ function victory(aboard) {
   if (waveTimer) { clearTimeout(waveTimer); waveTimer = null; }
   for (const k in enemies) delete enemies[k];
   for (const p of aboard) { p.escapes += 1; p.credits += 5000; p.dirty = true; saveProfile(p); }
-  io.emit('victory', { names: aboard.map(p => p.name), ids: aboard.map(p => p.id), wave });
+  io.emit('victory', { names: aboard.map(p => p.name), ids: aboard.map(p => p.id), wave, route: esc.route });
   setTimeout(resetRun, 15000);
 }
 function resetRun() {
   resetting = false;
-  for (const k in enemies) delete enemies[k];
-  for (const k in medkits) delete medkits[k];
-  for (const k in projs) delete projs[k];
-  for (const k in fires) delete fires[k];
-  for (const k in powerDrops) delete powerDrops[k];
+  for (const o of [enemies, medkits, projs, fires, powerDrops, claymores, turrets]) for (const k in o) delete o[k];
   shockwaves.length = 0;
   powers.double = powers.insta = 0;
   if (waveTimer) { clearTimeout(waveTimer); waveTimer = null; }
-  wave = START_WAVE - 1; bossCount = 0;
-  esc.phase = 'idle'; esc.fund = 0; esc.until = 0;
+  wave = START_WAVE - 1; bossCount = 0; dogRound = false;
+  Object.assign(esc, { route: null, phase: 'idle', fund: { heli: 0, boat: 0, tunnel: 0 }, until: 0, left: 0, paused: false });
+  Object.assign(quest, freshQuest());
   openDoors.clear();
+  destroyed.clear();
   rebuildObstacles();
   for (const p of Object.values(players)) {
-    Object.assign(p, safeSpawn(), { health: 100, maxHealth: 100, armor: 0, alive: true, perks: {}, frags: 2, molotovs: 0, monkeys: 0 });
+    Object.assign(p, safeSpawn(), { health: 100, maxHealth: 100, armor: 0, alive: true, downed: false, perks: {}, frags: 2, molotovs: 0, monkeys: 0, claymores: 0, turrets: 0 });
     if (p.weapons.length > 2) p.weapons = p.weapons.slice(0, 2);
     p.cur = Math.min(p.cur, p.weapons.length - 1);
   }
@@ -505,6 +610,8 @@ function sendInit(socket) {
     id: socket.id, players: all, enemies, wave, medkits, map: MAP, weapons: WEAPONS, openDoors: [...openDoors], dbKind: db.kind,
     powerDrops, fires: Object.values(fires).map(f => ({ ...f, ms: f.until - now() })), escape: escState(),
     bossNames: Object.fromEntries(Object.entries(BOSS_KINDS).map(([k, v]) => [k, v.name])),
+    quest: questState(), destroyed: [...destroyed], claymores: Object.values(claymores), turrets: Object.values(turrets).map(t => ({ ...t, ms: t.until - now() })),
+    difficulty, difficulties: Object.fromEntries(Object.entries(DIFF).map(([k, v]) => [k, v.name])), quickLines: QUICK_LINES,
   });
   socket.emit('loadout', { weapons: p.weapons, cur: p.cur, reset: true });
 }
@@ -514,9 +621,11 @@ io.on('connection', socket => {
   const idx = colorIdx++;
   const p = players[socket.id] = {
     id: socket.id, name: 'Player ' + socket.id.slice(0, 4), color: COLORS[idx % COLORS.length], skin: idx % 2, ...sp, yaw: 0, pitch: 0,
-    health: 100, maxHealth: 100, armor: 0, alive: true, kills: 0, crouch: false, hidden: false,
-    credits: START_CREDITS, bank: 0, perks: {}, weapons: process.env.START_WEAPONS ? process.env.START_WEAPONS.split(',') : ['rifle', 'pistol'], cur: 0, lastShot: 0, lastMelee: 0, lastThrow: 0, lastCherry: 0,
-    frags: 2, molotovs: 0, monkeys: 0,
+    health: 100, maxHealth: 100, armor: 0, alive: true, downed: false, downUntil: 0, selfReviveAt: 0, reviveProg: 0, reviving: null,
+    kills: 0, crouch: false, hidden: false,
+    credits: START_CREDITS, bank: 0, perks: {}, weapons: process.env.START_WEAPONS ? process.env.START_WEAPONS.split(',') : ['rifle', 'pistol'], cur: 0,
+    lastShot: 0, lastMelee: 0, lastThrow: 0, lastCherry: 0, lastChat: 0, lastPing: 0,
+    frags: 2, molotovs: 0, monkeys: 0, claymores: 0, turrets: 0,
     token: null, loaded: false, dirty: false, totalKills: 0, bestWave: 0, games: 0, playtime: 0, escapes: 0, lastPlaytimeTick: now(),
   };
 
@@ -572,6 +681,7 @@ io.on('connection', socket => {
     p.x = clamp(d.x, B.x1, B.x2); p.y = clamp(d.y, 0, 50); p.z = clamp(d.z, B.z1, B.z2);
     p.yaw = Number(d.yaw) || 0; p.pitch = Number(d.pitch) || 0;
     p.crouch = !!d.c;
+    if (p.downed) return;
     for (const m of Object.values(medkits)) {
       if (near(p, m.x, m.z, 1.4) && feetOf(p) < 2.5 && p.health < p.maxHealth) {
         delete medkits[m.id];
@@ -580,6 +690,16 @@ io.on('connection', socket => {
       }
     }
     for (const u of Object.values(powerDrops)) if (near(p, u.x, u.z, 1.6) && feetOf(p) < 2.5) takePower(u, p);
+    for (const q of MAP.questItems) {
+      if (!quest.items[q.id] && near(p, q.x, q.z, 1.6) && feetOf(p) < 2.5) {
+        quest.items[q.id] = true;
+        const got = MAP.questItems.filter(i => i.route === q.route && quest.items[i.id]).length;
+        const all = MAP.questItems.filter(i => i.route === q.route).length;
+        io.emit('notice', { text: `${p.name} found the ${q.name} (${got}/${all} for the ${MAP.escapes[q.route].name.toLowerCase()})`, kind: 'perk' });
+        io.emit('questPickup', { id: q.id, by: p.id });
+        emitQuest();
+      }
+    }
   });
 
   socket.on('switch', slot => { if (Number.isInteger(slot) && p.weapons[slot]) p.cur = slot; });
@@ -593,13 +713,13 @@ io.on('connection', socket => {
     const tos = Array.isArray(d.tos) ? d.tos.filter(vec3).slice(0, W.pellets) : [];
     socket.broadcast.emit('tracer', { id: p.id, from: d.from, tos: W.kind === 'melee' ? [] : tos, w: wKey });
     if (W.kind === 'rocket') {
-      if (vec3(d.dir)) spawnProj('rocket', p.id, d.from, d.dir);
+      if (vec3(d.dir)) spawnProj('rocket', p.id, d.from, d.dir, { pap: W.pap, boom: W.boom });
       return;
     }
     if (W.kind === 'bolt' && tos[0]) {
       const at = tos[0];
       io.emit('boltStuck', { at, ms: 1000 });
-      setTimeout(() => explode(at[0], at[1], at[2], 4, 260, p.id, 'bolt'), 1000);
+      setTimeout(() => explode(at[0], at[1], at[2], W.pap ? 5.5 : 4, W.boom, p.id, 'bolt'), 1000);
     }
     const hits = Array.isArray(d.hits) ? d.hits.slice(0, W.pellets) : [];
     const damaged = new Set();
@@ -608,15 +728,26 @@ io.on('connection', socket => {
       if (!e) continue;
       if (W.kind === 'melee' && !near(p, e.x, e.z, W.range + e.r + 1)) continue;
       const zone = ZONE_MULT[h.zone] ? h.zone : 'body';
+      const base = W.dmg * (p.perks.dtap ? 2 : 1);
+      if (!damaged.has(e.id)) { damaged.add(e.id); award(p, 10, 'Hit'); }
+      if (W.frost) {
+        e.frost = Math.min(e.type === 'boss' ? 0.6 : 1, e.frost + W.frost);
+        e.lastFrostHit = t;
+        if (e.frost >= 1 && e.frozenUntil < t) { e.frozenUntil = t + 2500; io.emit('frozen', { id: e.id }); }
+      }
+      if (zone === 'head' && e.helmet > 0) {
+        e.helmet -= base;
+        if (e.helmet <= 0) { e.helmet = 0; io.emit('helmetOff', { id: e.id }); }
+        else io.emit('enemyHit', { id: e.id, hp: e.hp, maxHp: e.maxHp, by: p.id, helmet: true });
+        continue;
+      }
       const mult = zone === 'head' && p.perks.deadshot ? 3 : ZONE_MULT[zone];
-      const dmg = W.dmg * mult * (p.perks.dtap ? 2 : 1);
-      if (!damaged.has(e.id)) { damaged.add(e.id); if (e.hp - dmg > 0) award(p, 10, 'Hit'); }
-      hurtEnemy(e, dmg, p, zone === 'head' ? 'head' : 'shot');
+      hurtEnemy(e, base * mult, p, zone === 'head' ? 'head' : 'shot');
     }
   });
 
   socket.on('melee', d => {
-    if (!p.alive || !d || now() - p.lastMelee < 500) return;
+    if (!p.alive || p.downed || !d || now() - p.lastMelee < 500) return;
     p.lastMelee = now();
     socket.broadcast.emit('meleeSwing', { id: p.id });
     const e = enemies[d.id];
@@ -625,13 +756,31 @@ io.on('connection', socket => {
   });
 
   socket.on('throw', d => {
-    if (!p.alive || !d || !vec3(d.o) || !vec3(d.d) || now() - p.lastThrow < 600) return;
+    if (!standing(p) || !d || !vec3(d.o) || !vec3(d.d) || now() - p.lastThrow < 600) return;
     const key = { frag: 'frags', molotov: 'molotovs', monkey: 'monkeys' }[d.type];
     if (!key || p[key] <= 0) return;
     p.lastThrow = now();
     p[key] -= 1;
     spawnProj(d.type, p.id, d.o, d.d);
     socket.broadcast.emit('throwSound', { id: p.id, type: d.type });
+  });
+
+  socket.on('place', d => {
+    if (!standing(p) || !d || !Number.isFinite(d.x) || !Number.isFinite(d.z) || !near(p, d.x, d.z, 3)) return;
+    const yaw = Number(d.yaw) || 0;
+    if (d.type === 'claymore' && p.claymores > 0) {
+      p.claymores--;
+      const id = 'c' + (++projSeq);
+      claymores[id] = { id, x: d.x, z: d.z, yaw, owner: p.id };
+      const mine = Object.values(claymores).filter(c => c.owner === p.id);
+      if (mine.length > 6) { delete claymores[mine[0].id]; io.emit('placedGone', { id: mine[0].id }); }
+      io.emit('placed', { kind: 'claymore', ...claymores[id] });
+    } else if (d.type === 'turret' && p.turrets > 0) {
+      p.turrets--;
+      const id = 't' + (++projSeq);
+      turrets[id] = { id, x: d.x, z: d.z, yaw, owner: p.id, until: now() + 60000, cd: 0 };
+      io.emit('placed', { kind: 'turret', ...turrets[id], ms: 60000 });
+    }
   });
 
   socket.on('reloadStart', () => {
@@ -641,18 +790,66 @@ io.on('connection', socket => {
     for (const e of Object.values(enemies)) if (near(p, e.x, e.z, 4.5 + e.r)) hurtEnemy(e, 140, p, 'shock');
   });
 
+  socket.on('revive', d => {
+    if (!d) return;
+    if (!d.on) { p.reviving = null; return; }
+    const q = players[d.id];
+    if (!q || q === p || !q.downed || !standing(p) || !near(p, q.x, q.z, 3)) return;
+    p.reviving = q.id;
+  });
+
+  socket.on('crystal', d => {
+    const c = MAP.crystals.find(x => x.id === (d && d.id));
+    if (!c || quest.crystals[c.id] || !p.alive || !near(p, c.x, c.z, 80) || !zoneOpen('snow')) return;
+    quest.crystals[c.id] = true;
+    const got = Object.keys(quest.crystals).length;
+    io.emit('crystalBroken', { id: c.id, by: p.id });
+    if (got >= MAP.crystals.length) {
+      quest.cryo = true;
+      io.emit('banner', { text: 'THE CRYO PEDESTAL AWAKENS — A WONDER WEAPON AWAITS', cls: 'gold', ms: 4500 });
+    } else io.emit('notice', { text: `${p.name} shattered a frozen crystal (${got}/${MAP.crystals.length})`, kind: 'perk' });
+    emitQuest();
+  });
+
+  socket.on('mark', d => {
+    if (!p.alive || !d || !Number.isFinite(d.x) || !Number.isFinite(d.z) || now() - p.lastPing < 400) return;
+    p.lastPing = now();
+    const e = d.enemyId && enemies[d.enemyId];
+    io.emit('mark', { by: p.id, name: p.name, color: p.color, x: +d.x, y: +d.y || 0, z: +d.z, enemyId: e ? e.id : null, kind: e ? (e.type === 'boss' ? 'boss' : 'enemy') : (d.kind || 'spot') });
+  });
+
+  socket.on('chat', d => {
+    if (!d || now() - p.lastChat < 700) return;
+    let text;
+    if (Number.isInteger(d.quick) && QUICK_LINES[d.quick]) text = QUICK_LINES[d.quick];
+    else if (typeof d.text === 'string') text = d.text.replace(/[<>]/g, '').trim().slice(0, 120);
+    if (!text) return;
+    p.lastChat = now();
+    io.emit('chat', { id: p.id, name: p.name, color: p.color, text, quick: Number.isInteger(d.quick) });
+  });
+
+  socket.on('setDifficulty', d => {
+    if (!DIFF[d] || d === difficulty) return;
+    if (wave > 1 || esc.phase !== 'idle') return notice(p.id, 'Difficulty can only be changed before wave 2', 'deny');
+    difficulty = d;
+    for (const e of Object.values(enemies)) { const f = DIFF[d].hp; e.hp = e.maxHp = Math.round(e.maxHp / (e.baseMult || 1) * f); e.baseMult = f; }
+    io.emit('difficulty', { difficulty, by: p.name });
+  });
+
   socket.on('buy', d => {
-    if (!p.alive || !d) return;
+    if (!standing(p) || !d) return;
     const pay = cost => {
       if (p.credits < cost) { notice(p.id, `Need ${cost} credits`, 'deny'); return false; }
       p.credits -= cost; p.dirty = true; return true;
     };
+    const needPower = () => { if (!quest.power) { notice(p.id, 'No power — switch on the generator in the Frozen Outpost', 'deny'); return true; } return false; };
     if (d.what === 'box') {
       const b = MAP.boxes.find(x => x.id === d.id);
       if (!b || !near(p, b.x, b.z, 3)) return;
       if (now() < (boxBusy[b.id] || 0)) return notice(p.id, 'The box is busy', 'deny');
       if (!pay(b.cost)) return;
-      const pool = BOX_POOL.filter(([k]) => !p.weapons.includes(k));
+      const owned = p.weapons.map(w => WEAPONS[w].base || w);
+      const pool = BOX_POOL.filter(([k]) => !owned.includes(k));
       const result = weightedPick(pool.length ? pool : BOX_POOL);
       boxBusy[b.id] = now() + BOX_ROLL_MS + 400;
       io.emit('boxRoll', { box: b.id, by: p.id, result, ms: BOX_ROLL_MS });
@@ -665,8 +862,10 @@ io.on('connection', socket => {
     } else if (d.what === 'perk') {
       const perk = MAP.perks.find(k => k.id === d.id);
       if (!perk || !near(p, perk.x, perk.z, 3)) return;
+      if (needPower()) return;
       if (p.perks[perk.id]) return notice(p.id, `You already have ${perk.name}`, 'deny');
-      if (!pay(perk.cost)) return;
+      const cost = perk.id === 'revive' && Object.keys(players).length === 1 ? 500 : perk.cost;
+      if (!pay(cost)) return;
       p.perks[perk.id] = true;
       if (perk.id === 'jug') { p.maxHealth = 200; p.health = 200; }
       io.emit('perkBought', { by: p.id, id: perk.id });
@@ -686,14 +885,14 @@ io.on('connection', socket => {
         if (!pay(w.cost)) return;
         p.armor = 150;
         notice(p.id, 'Body armor equipped (150)', 'weapon');
-      } else if (w.kind === 'frag' || w.kind === 'molotov' || w.kind === 'monkey') {
+      } else if (['frag', 'molotov', 'monkey', 'claymore', 'turret'].includes(w.kind)) {
         const key = w.kind + 's', cap = CAPS[key];
         if (p[key] >= cap) return notice(p.id, `You already carry the maximum ${w.name}`, 'deny');
         if (!pay(w.cost)) return;
-        p[key] = cap;
-        notice(p.id, `${w.name} refilled (${cap})`, 'weapon');
+        p[key] = w.kind === 'claymore' ? Math.min(cap, p[key] + 2) : cap;
+        notice(p.id, w.kind === 'claymore' ? `+2 Claymores — place with [X]` : w.kind === 'turret' ? 'Sentry Turret ready — deploy with [Z]' : `${w.name} refilled (${cap})`, 'weapon');
       } else if (w.kind === 'weapon') {
-        const slot = p.weapons.indexOf(w.weapon);
+        const slot = p.weapons.findIndex(k => (WEAPONS[k].base || k) === w.weapon);
         if (slot >= 0) {
           if (!pay(Math.round(w.cost / 2))) return;
           io.to(p.id).emit('ammoRefill', { slot });
@@ -712,27 +911,63 @@ io.on('connection', socket => {
       if (!pay(W.ammoCost)) return;
       io.to(p.id).emit('ammoRefill', { slot: p.cur });
       notice(p.id, `${W.name} ammo refilled`, 'weapon');
+    } else if (d.what === 'power') {
+      const g = MAP.generator;
+      if (!near(p, g.x, g.z, 4.2) || quest.power) return;
+      quest.power = true;
+      io.emit('power', { by: p.name });
+      emitQuest();
+    } else if (d.what === 'pap') {
+      const m = MAP.pap;
+      if (!near(p, m.x, m.z, 4.2)) return;
+      if (needPower()) return;
+      const k = p.weapons[p.cur];
+      if (WEAPONS[k].pap) return notice(p.id, 'This weapon is already upgraded', 'deny');
+      if (now() < papBusyUntil) return notice(p.id, 'The machine is busy', 'deny');
+      if (!pay(m.cost)) return;
+      papBusyUntil = now() + 3500;
+      const slot = p.cur;
+      io.emit('papStart', { by: p.id, w: k, ms: 3000 });
+      setTimeout(() => {
+        if (!players[p.id] || p.weapons[slot] !== k) return;
+        p.weapons[slot] = k + '_pap'; p.dirty = true;
+        io.to(p.id).emit('loadout', { weapons: p.weapons, cur: p.cur, fresh: slot });
+        notice(p.id, `Pack-a-Punched: ${WEAPONS[k + '_pap'].name}!`, 'weapon');
+      }, 3000);
+    } else if (d.what === 'cryo') {
+      const m = MAP.pedestal;
+      if (!near(p, m.x, m.z, 3.6)) return;
+      if (!quest.cryo) return notice(p.id, 'The pedestal is frozen shut… shatter the 3 glowing crystals hidden in the Frozen Outpost', 'deny');
+      const who = p.token || p.id;
+      if (quest.cryoTaken.includes(who)) return notice(p.id, 'You already took a Cryo Cannon', 'deny');
+      quest.cryoTaken.push(who);
+      giveWeapon(p, 'cryo');
+      notice(p.id, 'You took the Cryo Cannon — freeze them, then shatter them!', 'weapon');
     } else if (d.what === 'escape') {
-      const r = MAP.escape.radio;
-      if (!near(p, r.x, r.z, 3)) return;
+      const R = MAP.escapes[d.route];
+      if (!R || !near(p, R.terminal.x, R.terminal.z, 3.5)) return;
+      if (esc.route && esc.route !== d.route && esc.phase !== 'idle' && esc.phase !== 'funding') return notice(p.id, 'Another escape is already under way', 'deny');
       if (esc.phase !== 'idle' && esc.phase !== 'funding') return;
-      if (wave < MAP.escape.minWave) return notice(p.id, `The radio is dead... survive until wave ${MAP.escape.minWave} to call for extraction`, 'deny');
-      const amt = Math.min(1000, p.credits, MAP.escape.cost - esc.fund);
+      if (wave < R.minWave) return notice(p.id, `Not yet… survive until wave ${R.minWave}`, 'deny');
+      const miss = missingFor(d.route);
+      if (miss.length) return notice(p.id, `Still needed: ${miss.map(n => NEED_NAMES[n]).join(', ')}`, 'deny');
+      const amt = Math.min(2500, p.credits, R.cost - esc.fund[d.route]);
       if (amt <= 0) return notice(p.id, 'You have no credits to contribute', 'deny');
-      p.credits -= amt; p.dirty = true; esc.fund += amt;
-      if (esc.phase === 'idle') esc.phase = 'funding';
-      io.emit('notice', { text: `${p.name} paid ${amt} towards the helicopter (${esc.fund} / ${MAP.escape.cost})`, kind: 'bank' });
-      if (esc.fund >= MAP.escape.cost) {
-        setEscPhase('defend', MAP.escape.defendMs);
-        io.emit('banner', { text: 'EXTRACTION CALLED — HOLD OUT FOR 90 SECONDS!', cls: 'boss', ms: 5000 });
-        for (let i = 0; i < 8; i++) addEnemy(Math.random() < 0.5 ? 'runner' : 'brute');
+      p.credits -= amt; p.dirty = true; esc.fund[d.route] += amt;
+      esc.route = d.route; esc.phase = 'funding';
+      io.emit('notice', { text: `${p.name} paid ${amt} towards the ${R.name.toLowerCase()} (${esc.fund[d.route]} / ${R.cost})`, kind: 'bank' });
+      if (esc.fund[d.route] >= R.cost) {
+        esc.left = R.defendMs;
+        setEscPhase('defend');
+        io.emit('banner', { text: `ESCAPE STARTED — HOLD THE ${R.name.toUpperCase()} AREA!`, cls: 'boss', ms: 5000 });
+        for (let i = 0; i < 10; i++) addEnemy(rollEnemyType());
         addEnemy('boss', null, BOSS_ORDER[bossCount++ % BOSS_ORDER.length]);
       } else io.emit('escape', escState());
     }
   });
 
   socket.on('bank', d => {
-    if (!p.alive || !d || !near(p, MAP.bank.x, MAP.bank.z, 3)) return;
+    if (!standing(p) || !d || !near(p, MAP.bank.x, MAP.bank.z, 3)) return;
     if (d.action === 'deposit') {
       const amt = Math.min(500, p.credits);
       if (amt <= 0) return notice(p.id, 'No credits to deposit', 'deny');
@@ -748,7 +983,7 @@ io.on('connection', socket => {
 
   socket.on('give', d => {
     const q = players[d && d.to];
-    if (!q || q === p || !p.alive || !near(p, q.x, q.z, 5)) return;
+    if (!q || q === p || !standing(p) || !near(p, q.x, q.z, 5)) return;
     if (p.credits < 100) return notice(p.id, 'Need 100 credits to give', 'deny');
     p.credits -= 100; q.credits += 100; p.dirty = q.dirty = true;
     notice(p.id, `Gave 100 credits to ${q.name}`, 'bank');
@@ -785,6 +1020,77 @@ function takePower(u, p) {
   }
 }
 
+// ================= Players: downed / revive =================
+function damagePlayer(target, amount, from) {
+  if (!standing(target) || resetting) return;
+  amount *= D().dmg;
+  if (target.armor > 0) {
+    const absorbed = Math.min(target.armor, amount * 0.75);
+    target.armor -= absorbed;
+    amount -= absorbed;
+  }
+  target.health -= amount;
+  io.to(target.id).emit('damaged', from);
+  if (target.health <= 0) downPlayer(target);
+}
+
+function downPlayer(p) {
+  const solo = Object.keys(players).length === 1;
+  if (solo && !p.perks.revive) return killPlayer(p);
+  p.health = 0;
+  p.downed = true;
+  p.reviveProg = 0;
+  p.downUntil = now() + BLEED_MS;
+  p.selfReviveAt = solo ? now() + 5000 : 0;
+  if (solo) delete p.perks.revive; // solo Quick Revive is used up
+  io.emit('playerDowned', { id: p.id, name: p.name, solo });
+}
+
+function revivePlayer(p, by) {
+  p.downed = false;
+  p.health = Math.round(p.maxHealth * 0.5);
+  p.reviveProg = 0;
+  io.emit('playerRevived', { id: p.id, by: by ? by.id : null, name: p.name, byName: by ? by.name : null });
+  if (by) award(by, 100, 'Revive');
+}
+
+function killPlayer(target) {
+  target.health = 0;
+  target.alive = false;
+  target.downed = false;
+  const lost = Math.floor(target.credits * 0.25);
+  target.credits -= lost;
+  target.perks = {};
+  target.maxHealth = 100;
+  target.armor = 0;
+  if (target.weapons.length > 2) {
+    target.weapons = target.weapons.slice(0, 2);
+    target.cur = Math.min(target.cur, 1);
+    io.to(target.id).emit('loadout', { weapons: target.weapons, cur: target.cur });
+  }
+  target.dirty = true;
+  io.emit('playerDied', { id: target.id, lost });
+  setTimeout(() => {
+    if (!players[target.id] || target.alive) return;
+    Object.assign(target, safeSpawn(), { health: 100, alive: true, downed: false, crouch: false });
+    io.emit('playerRespawn', { id: target.id, x: target.x, y: target.y, z: target.z });
+  }, RESPAWN_MS);
+}
+
+function reviveTick(dt) {
+  const t = now();
+  for (const p of Object.values(players)) {
+    if (!p.downed) continue;
+    if (p.selfReviveAt && t >= p.selfReviveAt) { p.selfReviveAt = 0; revivePlayer(p, null); continue; }
+    const helper = Object.values(players).find(q => q.reviving === p.id && standing(q) && near(q, p.x, p.z, 3));
+    if (helper) {
+      p.reviveProg += dt / (helper.perks.revive ? 1.5 : 3);
+      if (p.reviveProg >= 1) { helper.reviving = null; revivePlayer(p, helper); continue; }
+    } else p.reviveProg = Math.max(0, p.reviveProg - dt);
+    if (t >= p.downUntil) killPlayer(p);
+  }
+}
+
 // ================= Simulation =================
 const TICK = 50;
 
@@ -806,40 +1112,6 @@ function moveToward(e, tx, tz, step) {
   if (!tryMove(e, e.x - uz * step * e.slide, e.z + ux * step * e.slide)) e.slide *= -1;
 }
 
-function damagePlayer(target, amount, from) {
-  if (!target.alive || resetting) return;
-  if (target.armor > 0) {
-    const absorbed = Math.min(target.armor, amount * 0.75);
-    target.armor -= absorbed;
-    amount -= absorbed;
-  }
-  target.health -= amount;
-  io.to(target.id).emit('damaged', from);
-  if (target.health <= 0) killPlayer(target);
-}
-
-function killPlayer(target) {
-  target.health = 0;
-  target.alive = false;
-  const lost = Math.floor(target.credits * 0.25);
-  target.credits -= lost;
-  target.perks = {};
-  target.maxHealth = 100;
-  target.armor = 0;
-  if (target.weapons.length > 2) {
-    target.weapons = target.weapons.slice(0, 2);
-    target.cur = Math.min(target.cur, 1);
-    io.to(target.id).emit('loadout', { weapons: target.weapons, cur: target.cur });
-  }
-  target.dirty = true;
-  io.emit('playerDied', { id: target.id, lost });
-  setTimeout(() => {
-    if (!players[target.id] || target.alive) return;
-    Object.assign(target, safeSpawn(), { health: 100, alive: true, crouch: false });
-    io.emit('playerRespawn', { id: target.id, x: target.x, y: target.y, z: target.z });
-  }, RESPAWN_MS);
-}
-
 function bossThrow(e, target) {
   const flightMs = 1100;
   const to = { x: target.x + rnd(-1, 1), z: target.z + rnd(-1, 1) };
@@ -847,23 +1119,65 @@ function bossThrow(e, target) {
   setTimeout(() => {
     io.emit('rockImpact', { at: [to.x, 0, to.z] });
     for (const p of Object.values(players)) {
-      if (p.alive && near(p, to.x, to.z, 2.6) && feetOf(p) < 2.6) damagePlayer(p, 30, { boss: true, x: to.x, z: to.z });
+      if (standing(p) && near(p, to.x, to.z, 2.6) && feetOf(p) < 2.6) damagePlayer(p, 30, { boss: true, x: to.x, z: to.z });
     }
   }, flightMs);
 }
 
-// Distance from point P to segment AB (2D)
 function segDist(px, pz, ax, az, bx, bz) {
   const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1;
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / l2));
   return Math.hypot(px - (ax + dx * t), pz - (az + dz * t));
 }
 
+// Juggernaut charge: wind up, then run in a straight line smashing sandbags/fences
+function juggernautCharge(e, dt) {
+  const c = e.ch;
+  if (c.ph === 'windup') {
+    c.t -= dt;
+    if (c.t <= 0) { c.ph = 'charge'; io.emit('jugCharge', { id: e.id }); }
+    return;
+  }
+  if (c.ph === 'stun') {
+    c.t -= dt;
+    if (c.t <= 0) { e.ch = null; e.chargeCd = 6; }
+    return;
+  }
+  const step = 18 * dt;
+  const nx = e.x + Math.sin(c.a) * step, nz = e.z + Math.cos(c.a) * step;
+  let o;
+  while ((o = obstacleAt(nx, nz, e.r))) {
+    const idx = MAP.obstacles.indexOf(o);
+    if (idx >= 0 && DESTRUCTIBLE.has(idx) && !destroyed.has(idx)) {
+      destroyed.add(idx);
+      rebuildObstacles();
+      io.emit('destroyed', { oi: idx });
+    } else {
+      c.ph = 'stun'; c.t = 1.6;
+      io.emit('jugStun', { id: e.id });
+      return;
+    }
+  }
+  if (!zoneAt(nx, nz)) { c.ph = 'stun'; c.t = 1.2; return; }
+  e.x = nx; e.z = nz; c.dist += step;
+  for (const p of Object.values(players)) {
+    if (!standing(p) || c.hit.has(p.id) || feetOf(p) > 2 || !near(p, e.x, e.z, e.r + 1.3)) continue;
+    c.hit.add(p.id);
+    damagePlayer(p, 45, { boss: true, x: e.x, z: e.z });
+    io.to(p.id).emit('knock', { x: Math.sin(c.a) * 14, z: Math.cos(c.a) * 14 });
+  }
+  if (c.dist >= 28) { e.ch = null; e.chargeCd = 6; }
+}
+
 function bossAbilities(e, target, dist, dt) {
   if (e.bk === 'king') {
     if (e.throwCd === 0 && dist > 6 && dist < 30 && los(e.x, e.z, target.x, target.z, 1.6)) { e.throwCd = 4.5; bossThrow(e, target); }
+  } else if (e.bk === 'juggernaut') {
+    if (!e.ch && e.chargeCd === 0 && dist > 6 && dist < 30 && los(e.x, e.z, target.x, target.z, 1.6)) {
+      e.ch = { ph: 'windup', t: 1.1, a: Math.atan2(target.x - e.x, target.z - e.z), dist: 0, hit: new Set() };
+      io.emit('jugWindup', { id: e.id, a: e.ch.a });
+    }
   } else if (e.bk === 'warden') {
-    // Charges, then sweeps a laser beam towards the target; blocked by tall cover, jump or crouch to take less damage
     const b = e.beam;
     const aimAt = Math.atan2(target.x - e.x, target.z - e.z);
     if (!b && e.laserCd === 0 && dist < 40 && los(e.x, e.z, target.x, target.z, 1.6)) {
@@ -885,13 +1199,12 @@ function bossAbilities(e, target, dist, dt) {
           b.tickT = 0.2;
           const bx = e.x + Math.sin(b.a) * b.len, bz = e.z + Math.cos(b.a) * b.len;
           for (const p of Object.values(players)) {
-            if (p.alive && feetOf(p) < 1.0 && segDist(p.x, p.z, e.x, e.z, bx, bz) < 0.9) damagePlayer(p, p.crouch ? 4 : 9, { boss: true, x: e.x, z: e.z });
+            if (standing(p) && feetOf(p) < 1.0 && segDist(p.x, p.z, e.x, e.z, bx, bz) < 0.9) damagePlayer(p, p.crouch ? 4 : 9, { boss: true, x: e.x, z: e.z });
           }
         }
       }
     }
   } else if (e.bk === 'summoner') {
-    // Ground-slam shockwave (jump over it) and summons runners
     if (e.slamCd === 0 && dist < 14) {
       e.slamCd = 7;
       shockwaves.push({ x: e.x, z: e.z, r: 0, hit: new Set() });
@@ -909,6 +1222,16 @@ function bossAbilities(e, target, dist, dt) {
   }
 }
 
+// Gunner zombies: Stormtrooper-grade aim
+function gunnerShoot(e, target, dist) {
+  e.shotCd = rnd(1.6, 2.8);
+  const hit = Math.random() < (dist < 6 ? 0.25 : 0.1);
+  const miss = () => (Math.random() < 0.5 ? -1 : 1) * rnd(0.8, 2.6);
+  const to = hit ? [target.x, feetOf(target) + 1.2, target.z] : [target.x + miss(), feetOf(target) + rnd(0.3, 2.6), target.z + miss()];
+  io.emit('zshot', { id: e.id, from: [e.x, 1.35, e.z], to, hit });
+  if (hit) damagePlayer(target, 7, { x: e.x, z: e.z });
+}
+
 let tickMax = 0;
 if (process.env.DEBUG_TICK) setInterval(() => { console.log(`[tick] max ${tickMax.toFixed(2)}ms, enemies ${Object.keys(enemies).length}`); tickMax = 0; }, 5000);
 setInterval(() => {
@@ -921,7 +1244,7 @@ function simulate() {
   const dt = TICK / 1000;
   const t = now();
   tickN++;
-  const alive = resetting ? [] : Object.values(players).filter(p => p.alive);
+  const alive = resetting ? [] : Object.values(players).filter(standing);
   const elist = Object.values(enemies);
   const monkeys = activeMonkeys();
 
@@ -932,8 +1255,10 @@ function simulate() {
       p.hidden = !elist.some(e => los(e.x, e.z, p.x, p.z, 1.0));
     }
   }
-  for (const p of Object.values(players)) if (!p.alive) p.hidden = false;
+  for (const p of Object.values(players)) if (!standing(p)) p.hidden = false;
   if (tickN % 5 === 0) computeFlow(monkeys.length ? monkeys : alive.filter(p => !p.hidden));
+
+  reviveTick(dt);
 
   for (const cf of MAP.campfires) {
     const zn = zoneAt(cf.x, cf.z);
@@ -949,6 +1274,27 @@ function simulate() {
     if (t > f.until) { delete fires[f.id]; continue; }
     for (const e of Object.values(enemies)) if (Math.hypot(e.x - f.x, e.z - f.z) < f.r + e.r) hurtEnemy(e, (e.type === 'boss' ? 25 : 70) * dt, players[f.owner], 'fire');
   }
+  // claymores trigger on zombies in front of them
+  for (const c of Object.values(claymores)) {
+    const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw);
+    const trip = Object.values(enemies).some(e => {
+      const dx = e.x - c.x, dz = e.z - c.z, d = Math.hypot(dx, dz);
+      return d < 2.8 && d > 0.01 && (dx * fx + dz * fz) / d > 0.15;
+    });
+    if (trip) { delete claymores[c.id]; io.emit('placedGone', { id: c.id }); explode(c.x + fx, 0.4, c.z + fz, 4.5, 380, c.owner, 'claymore'); }
+  }
+  // sentry turrets
+  for (const tu of Object.values(turrets)) {
+    if (t > tu.until) { delete turrets[tu.id]; io.emit('placedGone', { id: tu.id }); continue; }
+    tu.cd -= dt;
+    if (tu.cd > 0) continue;
+    let best = null, bd = 25 * 25;
+    for (const e of Object.values(enemies)) { const dd = dist2(e, tu); if (dd < bd && los(tu.x, tu.z, e.x, e.z, 1.2)) { bd = dd; best = e; } }
+    if (!best) continue;
+    tu.cd = 0.18;
+    io.emit('tshot', { id: tu.id, to: [best.x, best.type === 'boss' ? 2.5 : 1.2, best.z] });
+    hurtEnemy(best, best.type === 'boss' ? 12 : 22, players[tu.owner], 'turret');
+  }
   for (let i = shockwaves.length - 1; i >= 0; i--) {
     const s = shockwaves[i];
     s.r += 13 * dt;
@@ -960,14 +1306,18 @@ function simulate() {
     }
   }
   for (const u of Object.values(powerDrops)) if (t > u.until) { delete powerDrops[u.id]; io.emit('puGone', { id: u.id }); }
-  escapeTick();
+  escapeTick(dt);
 
   for (const e of elist) {
     if (!enemies[e.id]) continue;
     e.attackCd = Math.max(0, e.attackCd - dt);
-    for (const k of ['throwCd', 'laserCd', 'slamCd', 'summonCd']) if (e[k] !== undefined) e[k] = Math.max(0, e[k] - dt);
+    for (const k of ['throwCd', 'laserCd', 'slamCd', 'summonCd', 'chargeCd', 'shotCd']) if (e[k] !== undefined) e[k] = Math.max(0, e[k] - dt);
+    if (e.frost > 0 && t - e.lastFrostHit > 500) e.frost = Math.max(0, e.frost - 0.35 * dt);
     if (process.env.FREEZE) continue; // testing: enemies stand still
-    const step = e.speed * dt * (e.beam ? (e.beam.ph === 'charge' ? 0 : 0.3) : 1);
+    if (e.frozenUntil > t) continue;
+    if (e.ch) { juggernautCharge(e, dt); if (!enemies[e.id]) continue; continue; }
+    const slow = 1 - 0.75 * e.frost;
+    const step = e.speed * dt * slow * (e.beam ? (e.beam.ph === 'charge' ? 0 : 0.3) : 1);
 
     // Monkey bombs pull every zombie in range
     let monkey = null, md = 60 * 60;
@@ -989,18 +1339,23 @@ function simulate() {
     if (target) {
       const dist = Math.sqrt(best);
       const reach = e.r + 1.2 + (feetOf(target) > 0.4 ? 1.5 : 0);
-      if (dist > e.r + 0.9) {
-        if (dist < 14 && los(e.x, e.z, target.x, target.z, 0.3)) moveToward(e, target.x, target.z, step);
+      const seen = dist < 35 && los(e.x, e.z, target.x, target.z, 0.3);
+      const holdRange = e.type === 'gunner' && seen && dist < 9;
+      if (dist > e.r + 0.9 && !holdRange) {
+        if (dist < 14 && seen) moveToward(e, target.x, target.z, step);
         else {
           const wp = flowStep(e.x, e.z);
           moveToward(e, wp ? wp.x : target.x, wp ? wp.z : target.z, step);
         }
       }
-      if (dist < reach && e.attackCd === 0 && feetOf(target) < 2.5) {
+      if (e.type === 'exploder') {
+        if (dist < 1.9) { killEnemy(e, null, 'self'); continue; }
+      } else if (dist < reach && e.attackCd === 0 && feetOf(target) < 2.5) {
         e.attackCd = e.cd;
         io.emit('enemyAttack', { id: e.id });
         damagePlayer(target, e.dmg, { x: e.x, z: e.z });
       }
+      if (e.type === 'gunner' && e.shotCd === 0 && seen && dist > 3) gunnerShoot(e, target, dist);
       if (e.type === 'boss') bossAbilities(e, target, dist, dt);
     } else {
       if (e.beam) e.beam = null;
@@ -1025,17 +1380,21 @@ function simulate() {
   for (const p of Object.values(players)) {
     const s = ps[p.id] = {
       x: r2(p.x), y: r2(p.y), z: r2(p.z), yaw: r2(p.yaw), pitch: r2(p.pitch), health: Math.round(p.health), armor: Math.round(p.armor),
-      alive: p.alive, c: p.crouch, hid: p.hidden, weapon: p.weapons[p.cur],
+      alive: p.alive, dn: p.downed, c: p.crouch, hid: p.hidden, weapon: p.weapons[p.cur],
     };
-    if (full) Object.assign(s, { maxHealth: p.maxHealth, kills: p.kills, credits: p.credits, bank: p.bank, perks: Object.keys(p.perks), fr: p.frags, mo: p.molotovs, mk: p.monkeys });
+    if (p.downed) { s.rv = r2(p.reviveProg); s.bl = Math.max(0, Math.ceil((p.downUntil - t) / 1000)); }
+    if (full) Object.assign(s, { maxHealth: p.maxHealth, kills: p.kills, credits: p.credits, bank: p.bank, perks: Object.keys(p.perks), fr: p.frags, mo: p.molotovs, mk: p.monkeys, cl: p.claymores, tu: p.turrets });
   }
   const es = {};
   for (const e of Object.values(enemies)) {
-    es[e.id] = { x: r2(e.x), z: r2(e.z), hp: Math.ceil(e.hp), maxHp: e.maxHp, type: e.type, bk: e.bk };
-    if (e.beam) es[e.id].beam = { ph: e.beam.ph, a: +e.beam.a.toFixed(3), len: +e.beam.len.toFixed(1) };
+    const s = es[e.id] = { x: r2(e.x), z: r2(e.z), hp: Math.ceil(e.hp), maxHp: e.maxHp, type: e.type, bk: e.bk };
+    if (e.beam) s.beam = { ph: e.beam.ph, a: +e.beam.a.toFixed(3), len: +e.beam.len.toFixed(1) };
+    if (e.ch) { s.ch = e.ch.ph; s.a = +e.ch.a.toFixed(3); }
+    if (e.frost > 0.05) s.fz = e.frozenUntil > t ? 2 : r2(e.frost);
+    if (e.helmet > 0) s.hm = 1;
   }
   const pj = {};
-  for (const p of Object.values(projs)) pj[p.id] = { t: p.type, x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2), r: p.rest ? 1 : 0 };
+  for (const p of Object.values(projs)) pj[p.id] = { t: p.type, x: r2(p.x), y: r2(p.y), z: r2(p.z), r: p.rest ? 1 : 0 };
   const msg = { players: ps, enemies: es, projs: pj, wave };
   if (full) { msg.pu = { double: Math.max(0, powers.double - t), insta: Math.max(0, powers.insta - t) }; msg.esc = escState(); }
   io.volatile.emit('state', msg); // volatile: a late packet is dropped instead of queued behind newer ones

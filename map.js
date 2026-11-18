@@ -97,7 +97,28 @@ function buildMap() {
     { id: 'mule',     name: 'Mule Kick',       cost: 3000, x: 104,  z: 0,    color: 0x2e7d32, desc: 'Carry a 3rd weapon' },
     { id: 'deadshot', name: 'Deadshot',        cost: 2000, x: -104, z: -104, color: 0x6d4c41, desc: '3x headshots, tighter aim' },
     { id: 'cherry',   name: 'Electric Cherry', cost: 2000, x: -104, z: 34,   color: 0x29b6f6, desc: 'Reloading shocks nearby enemies' },
+    { id: 'revive',   name: 'Quick Revive',    cost: 1500, x: 7,    z: -81,  color: 0x00bcd4, desc: 'Revive 2x faster; self-revive when playing solo' },
   ];
+  // Power, Pack-a-Punch, quests
+  const generator = { x: -100, z: -30, w: 2.2, d: 1.2, h: 1.7 };
+  const pap = { x: -95, z: -55, w: 1.8, d: 1.3, h: 2.3, cost: 5000 };
+  const questItems = [
+    { id: 'antenna', name: 'Radio Antenna', route: 'heli', x: 24, z: -88 },
+    { id: 'battery', name: 'Radio Battery', route: 'heli', x: 75, z: -16 },
+    { id: 'circuit', name: 'Circuit Board', route: 'heli', x: -58, z: 22 },
+    { id: 'fuel1', name: 'Fuel Canister', route: 'boat', x: 100, z: 14 },
+    { id: 'fuel2', name: 'Fuel Canister', route: 'boat', x: -100, z: -82 },
+  ];
+  const crystals = [
+    { id: 'c1', x: -60, y: 5.25, z: -26 }, { id: 'c2', x: -105, y: 0.7, z: -36 }, { id: 'c3', x: -45, y: 0.7, z: 36 },
+  ];
+  const pedestal = { x: -88, z: 4, w: 1.1, d: 1.1, h: 1.1 };
+  const rubble = { x: -104, z: -60, w: 3, d: 4.5, h: 2.2 };
+  const escapes = {
+    heli:   { name: 'Helicopter', terminalName: 'radio in the Military Base', zone: 'base',  terminal: { x: 84, z: -104, w: 1.2, d: 0.8, h: 1.5 }, pad: { x: 95, z: -92, r: 7 },  cost: 30000, minWave: 12, needs: ['antenna', 'battery', 'circuit', 'power'], defendMs: 90000, boardMs: 30000 },
+    boat:   { name: 'Boat', terminalName: 'boat dock in the Frozen Outpost', zone: 'snow',  terminal: { x: -80, z: 27.5, w: 4, d: 1.8, h: 1.0 }, pad: { x: -80, z: 25, r: 5.5 }, cost: 25000, minWave: 12, needs: ['fuel1', 'fuel2'], defendMs: 75000, boardMs: 25000 },
+    tunnel: { name: 'Crypt Tunnel', terminalName: 'crypt lever in the Ruins', zone: 'ruins', terminal: { x: -99, z: -66, w: 1, d: 1, h: 1.3 }, pad: { x: -104, z: -60, r: 4.5 }, cost: 20000, minWave: 12, needs: ['rubble'], defendMs: 60000, boardMs: 25000 },
+  };
   // Things you buy off the walls (flat panels, not solid)
   const wallbuys = [
     { id: 'armor',    kind: 'armor',   name: 'Body Armor',      cost: 1500, x: -10,    z: 39.4,   face: [0, -1] },
@@ -110,18 +131,22 @@ function buildMap() {
     { id: 'armor2',   kind: 'armor',   name: 'Body Armor',      cost: 1500, x: 109.4,  z: -70,    face: [-1, 0] },
     { id: 'frag2',    kind: 'frag',    name: 'Frag Grenades',   cost: 250,  x: -15,    z: -109.4, face: [0, 1] },
     { id: 'molotov2', kind: 'molotov', name: 'Molotovs',        cost: 500,  x: -109.4, z: 0,      face: [1, 0] },
+    { id: 'claymore', kind: 'claymore', name: 'Claymores',      cost: 750,  x: 60,     z: -109.4, face: [0, 1] },
+    { id: 'turret',   kind: 'turret',  name: 'Sentry Turret',   cost: 2500, x: 70,     z: -109.4, face: [0, 1] },
+    { id: 'claymore2', kind: 'claymore', name: 'Claymores',     cost: 750,  x: 39.4,   z: 20,     face: [-1, 0] },
   ];
   const ammoCrates = [
     { id: 'a_main', x: 25, z: 14 }, { id: 'a_forest', x: 10, z: -62 }, { id: 'a_village', x: 68, z: -12 },
     { id: 'a_ruins', x: -75, z: -68 }, { id: 'a_base', x: 80, z: -78 }, { id: 'a_snow', x: -80, z: 12 },
   ].map(a => ({ ...a, w: 1.4, d: 0.8, h: 0.9 }));
-  const escape = { pad: { x: 95, z: -92, r: 7 }, radio: { x: 84, z: -104, w: 1.2, d: 0.8, h: 1.5 }, cost: 15000, minWave: 12, defendMs: 90000, boardMs: 30000 };
 
   for (const b of boxes) obstacles.push([b.x, b.z, b.w, b.d, b.h]);
   obstacles.push([bank.x, bank.z, bank.w, bank.d, bank.h]);
   for (const p of perks) obstacles.push([p.x, p.z, perkSize.w, perkSize.d, perkSize.h]);
   for (const a of ammoCrates) obstacles.push([a.x, a.z, a.w, a.d, a.h]);
-  obstacles.push([escape.radio.x, escape.radio.z, escape.radio.w, escape.radio.d, escape.radio.h]);
+  for (const s2 of [generator, pap, pedestal]) obstacles.push([s2.x, s2.z, s2.w, s2.d, s2.h]);
+  for (const e of Object.values(escapes)) { const t = e.terminal; obstacles.push([t.x, t.z, t.w, t.d, t.h]); }
+  const rubbleIdx = obstacles.length; obstacles.push([rubble.x, rubble.z, rubble.w, rubble.d, rubble.h]);
 
   // ---------- Placement helpers ----------
   const keepClear = [
@@ -132,7 +157,11 @@ function buildMap() {
     [38, -79, 60, -71], [71, -62, 79, -38],                                    // base entrances
     [85, -101, 105, -83], [80, -108, 88, -100],                                // helipad + radio
     [-62, -4, -38, 4], [-79, -62, -71, -38], [-92, 6, -68, 24], [-80, -9, -70, -1], [-110, 28, -98, 40], // snow paths, lake, campfire, perk
+    [-104, -34, -96, -26], [-100, -59, -90, -51], [-110, -70, -96, -52], [-94, 0, -84, 8],                 // generator, PaP, tunnel, pedestal
+    [-86, 20, -74, 32], [3, -85, 11, -77],                                                                // boat, quick revive
   ];
+  for (const q of questItems) keepClear.push([q.x - 2, q.z - 2, q.x + 2, q.z + 2]);
+  for (const c of crystals) keepClear.push([c.x - 1.5, c.z - 1.5, c.x + 1.5, c.z + 1.5]);
   for (const w of wallbuys) keepClear.push([w.x - 2.5, w.z - 2.5, w.x + 2.5, w.z + 2.5]);
   for (const a of ammoCrates) keepClear.push([a.x - 2, a.z - 2, a.x + 2, a.z + 2]);
   for (const d of DOORS) keepClear.push([d.x - 4, d.z - 4, d.x + 4, d.z + 4]);
@@ -189,7 +218,7 @@ function buildMap() {
     const fz = z < 0 ? z + d / 2 + 3.5 : z - d / 2 - 3.5;
     for (const side of [-1, 1]) {
       const fb = [x + side * (w / 4 + 0.9), fz, w / 2 - 1.2, 0.2, 1.0];
-      decor.push({ t: 'fence', b: fb }); solid(fb);
+      decor.push({ t: 'fence', b: fb, oi: obstacles.length }); solid(fb);
     }
   });
   { const b = [75, 0, 2.2, 2.2, 1.0]; decor.push({ t: 'well', b }); solid(b); }
@@ -248,7 +277,11 @@ function buildMap() {
 
   // ---------- Military Base ----------
   const BA = zone('base');
-  decor.push({ t: 'helipad', x: escape.pad.x, z: escape.pad.z, r: escape.pad.r });
+  decor.push({ t: 'helipad', x: escapes.heli.pad.x, z: escapes.heli.pad.z, r: escapes.heli.pad.r });
+  // sandbag ring around the helipad (smashable by the Juggernaut)
+  for (const [x, z, w, d] of [[86, -82, 4, 0.9], [104, -82, 4, 0.9], [86, -101.5, 0.9, 3], [106, -96, 0.9, 4]]) {
+    const b = [x, z, w, d, 1.0]; decor.push({ t: 'sandbag', b, oi: obstacles.length }); solid(b);
+  }
   for (const b of [[55, -96, 9, 6, 3.2], [100, -55, 7, 8, 3.2]]) { decor.push({ t: 'bunker', b }); solid(b); }
   decor.push({ t: 'tower', x: 48, z: -104 });
   for (const [x, z] of [[46, -102], [50, -102], [46, -106], [50, -106]]) solid([x, z, 0.4, 0.4, 6]);
@@ -261,7 +294,7 @@ function buildMap() {
   for (let i = 0; i < 12; i++) {
     const along = rng() < 0.5, len = R(2.5, 4.5), w = along ? len : 0.9, d = along ? 0.9 : len;
     const p = place(BA, w, d, 1.6); if (!p) continue;
-    const b = [p.x, p.z, w, d, 1.0]; decor.push({ t: 'sandbag', b }); solid(b);
+    const b = [p.x, p.z, w, d, 1.0]; decor.push({ t: 'sandbag', b, oi: obstacles.length }); solid(b);
   }
   for (let i = 0; i < 3; i++) {
     const along = rng() < 0.5, w = along ? 4.2 : 2.1, d = along ? 2.1 : 4.2;
@@ -311,9 +344,11 @@ function buildMap() {
   const bushes = decor.filter(d => d.t === 'bush').map(d => [d.x, d.z, d.r]);
   const campfires = decor.filter(d => d.t === 'campfire').map(d => ({ x: d.x, z: d.z }));
 
+  const destructible = decor.filter(d => d.oi !== undefined).map(d => d.oi);
   return {
     bounds: BOUNDS, zones: ZONES, doors: DOORS, walls, decor, obstacles, bushes, campfires,
-    boxes, bank, perks, perkSize, wallbuys, ammoCrates, escape, wallH: WALL_H,
+    boxes, bank, perks, perkSize, wallbuys, ammoCrates, escapes, wallH: WALL_H,
+    generator, pap, questItems, crystals, pedestal, rubble, rubbleIdx, destructible,
   };
 }
 

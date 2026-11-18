@@ -427,3 +427,73 @@ export function victory() {
     tone(dest, t + d, 0.6, { type: 'sine', freq: f / 2, vol: 0.2 });
   });
 }
+
+// ---------- v5 additions ----------
+export function thunder(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1.4);
+  noise(dest, t, 0.08, { type: 'highpass', freq: 2000, vol: 1 });
+  noise(dest, t + 0.05, 1.8, { freq: 500, freqEnd: 40, vol: 1, attack: 0.02 });
+}
+export function whiz(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.7);
+  tone(dest, t, 0.18, { type: 'sine', freq: 2600, freqEnd: 900, vol: 0.25 });
+  noise(dest, t, 0.15, { type: 'bandpass', freq: 4000, freqEnd: 1500, q: 3, vol: 0.3 });
+}
+export function clang(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.9);
+  [1250, 1870, 2610].forEach(f => tone(dest, t, 0.35, { type: 'triangle', freq: f, freqEnd: f * 0.97, vol: 0.18 }));
+  noise(dest, t, 0.05, { type: 'highpass', freq: 3000, vol: 0.5 });
+}
+export function papJingle(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1);
+  for (let i = 0; i < 10; i++) noise(dest, t + i * 0.22, 0.12, { type: 'bandpass', freq: 600 + (i % 3) * 300, q: 3, vol: 0.6 });
+  [392, 466, 523, 622, 784].forEach((f, i) => tone(dest, t + 2.2 + i * 0.09, 0.4, { type: 'sawtooth', freq: f, vol: 0.18 }));
+}
+export function powerOn() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.8);
+  tone(dest, t, 1.6, { type: 'sawtooth', freq: 40, freqEnd: 120, vol: 0.4, attack: 0.3 });
+  noise(dest, t + 0.2, 1.2, { freq: 200, freqEnd: 900, vol: 0.4, attack: 0.4 });
+  [262, 330, 392, 523].forEach((f, i) => tone(dest, t + 1.3 + i * 0.12, 0.5, { type: 'triangle', freq: f, vol: 0.25 }));
+}
+export function freeze(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.8);
+  for (let i = 0; i < 6; i++) tone(dest, t + i * 0.03, 0.2, { type: 'sine', freq: 3000 + Math.random() * 2500, vol: 0.12 });
+  noise(dest, t, 0.4, { type: 'highpass', freq: 5000, vol: 0.4 });
+}
+export function shatter(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1);
+  for (let i = 0; i < 8; i++) noise(dest, t + i * 0.02, 0.06, { type: 'bandpass', freq: 4000 + Math.random() * 4000, q: 5, vol: 0.7 });
+}
+export function chatPing() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.3);
+  tone(dest, t, 0.12, { type: 'sine', freq: 880, vol: 0.3 }); tone(dest, t + 0.08, 0.15, { type: 'sine', freq: 1320, vol: 0.3 });
+}
+export function markPing(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.6);
+  tone(dest, t, 0.25, { type: 'sine', freq: 1568, freqEnd: 1480, vol: 0.3 });
+}
+export function bark(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 0.8);
+  for (let i = 0; i < 2; i++) { tone(dest, t + i * 0.22, 0.12, { type: 'sawtooth', freq: 420, freqEnd: 260, vol: 0.4 }); noise(dest, t + i * 0.22, 0.1, { type: 'bandpass', freq: 900, q: 2, vol: 0.5 }); }
+}
+export function servo(pos) {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(pos, 1);
+  tone(dest, t, 0.35, { type: 'square', freq: 90, freqEnd: 60, vol: 0.3 });
+  noise(dest, t, 0.3, { type: 'bandpass', freq: 1200, q: 6, vol: 0.4 });
+}
+export function revive() {
+  if (!ok()) return;
+  const t = ctx.currentTime, dest = out(null, 0.5);
+  [523, 659, 784, 1047].forEach((f, i) => tone(dest, t + i * 0.07, 0.3, { type: 'triangle', freq: f, vol: 0.3 }));
+}
